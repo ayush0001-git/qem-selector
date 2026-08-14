@@ -1,5 +1,12 @@
 # qemsel — Quantum Error Mitigation Technique Selector
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ayush0001-git/qem-selector/master/results/boundary/boundary_overlay.png" alt="ZNE Help-Harm Boundary Overlay" width="700"/>
+  <br/>
+  <em>Figure 1: The machine learning selector's decision boundary overlay against the analytical Scavino help-harm limit. The selector dynamically recovers the boundary on gate-dominated FakeManilaV2 but correctly refuses ZNE on readout-heavy FakeLagosV2 (exhibiting 100% precision).</em>
+</p>
+
+
 Benchmark quantum error mitigation (QEM) techniques on noisy simulated
 backends, then train an ML classifier that recommends the best technique for a
 new circuit from its static features — without spending shots trying them all.
