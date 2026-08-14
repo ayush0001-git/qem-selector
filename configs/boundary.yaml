@@ -1,0 +1,106 @@
+# qemsel experiment config — ANGLE 3 boundary sweep (shots x noise)
+# =================================================================
+# The headline Angle-3 dataset: the selector's learned ZNE-refusal boundary
+# vs Scavino's analytic finite-shot help-harm boundary (arXiv:2605.08251).
+# What makes this config different from configs/research.yaml is the two NEW
+# axes the boundary needs:
+#   * a SHOTS axis  — `shots` is a LIST, so every (circuit, backend) unit is
+#     re-run at each budget; results.csv gains a `base_shots` int column and
+#     aggregated.csv groups per-budget (seeds averaged WITHIN a budget).
+#   * a fixed-Richardson ZNE variant `zne_fr` — the cost-neutral, equal-split,
+#     fixed-coefficient ZNE the paper analyses (our `zne` differs on all three
+#     axes, so the overlay would be apples-to-oranges without it).
+# feature_version: 2 makes the selector shots-aware (log2_shots etc.) — a
+# shots LIST with feature_version 1 would train a shots-BLIND selector.
+#
+# DEPENDENCIES (this config only RUNS end-to-end once these land):
+#   * feature_version 2         -> builder-features / B5 (extract_features v2)
+#   * techniques zne_fr, cdr_ridge -> builder-mitigation / B1 dispatch
+# Until then it validates (names are known) but a run raises NotImplementedError
+# from the un-landed collaborator. experiment.py (B4) is complete and tested
+# against monkeypatched fakes.
+#
+# GRID (integrator sizes it — this is the B4 draft from the task spec)
+#   3 families x 3 qubit counts x 3 depths x 3 seeds        = 81 circuits
+#   x (2 devices x 5 noise scales)                          = 10 backends
+#   x 3 shot budgets [256, 1024, 4096]                      = 2430 units
+#   x 7 techniques.
+#   Source-level min_abs_ideal keeps the family mix balanced (mirror is
+#   ideal-exempt; layered_random / hw_efficient_ansatz are re-seeded to
+#   |<Z^n>| >= 0.25 before any noisy work) — expect ~81/81 circuits to survive
+#   both screens, as configs/research.yaml verified for its grid.
+#
+# WALL-TIME (MEASURED, integrator bench 2026-07-23, this machine/venv —
+# faithful per-unit work: circuit + ideal + features v2 + executor +
+# apply_technique x7, matching experiment.py's unit loop):
+#   * layered_random over the FULL (n_qubits {2,3,4} x depth {4,8,16}) x
+#     {Manila, Lagos} grid at 4096 shots: mean 7.44 s/unit (range 3.2-11.0;
+#     CDR-refusal cells are the fast end — refusals are part of the real mix).
+#   * budget factor 0.966 = mean(256, 1024, 4096)/4096 at the (n3, d8) centre
+#     cell — shot count barely matters; transpilation + CDR's 10 training-
+#     circuit simulations dominate each unit.
+#   * family factor 1.076 = mean(layered 1.00, hw_efficient 1.23, mirror 1.00).
+#   * dialed backends (8 of 10 grid points) measured ~0.78x the x1.0 cost
+#     (synthetic depolarizing+readout model is cheaper than the x1.0 composite
+#     from_backend channels) — NOT applied below; kept as free safety margin.
+#   TOTAL: 2430 units x 7.44 s x 0.966 x 1.076 ~= 18,800 s ~= 5.2 h expected,
+#   <= 8 h even with a 1.5x machine-contention safety factor (7.8 h) — so the
+#   grid ships UNTRIMMED. If the machine is visibly loaded, trim n_qubits to
+#   [2, 3] or drop the 4096 budget first (each roughly halves the cost).
+# Devices are the two CHEAP small backends (Manila/Lagos); FakeSherbrooke is
+# deliberately excluded (6-8x costlier per unit — see research.yaml).
+#
+# RUN (crash-safe; re-run the same command to resume — the resume key now
+# includes base_shots, so partial budgets recompute cleanly):
+#   & ".\.venv\Scripts\python.exe" scripts\run_experiment.py `
+#       --config configs\boundary.yaml --out results\boundary
+#
+# CAVEATS carried into the overlay (report section 9): the eps axis must use
+# REALIZED get_backend_info error rates, NOT the nominal @x dial (cap
+# saturation on Lagos q2; x1.0 uses the composite from_backend model while
+# scaled variants use pure depolarizing+readout — see research.yaml).
+# CORRECTION (science review Finding 1/5, 2026-07-23): zne_fr amplifies noise
+# by GATE FOLDING (fold_global) on sim AND hardware — it does NOT use the @x
+# dial and cannot amplify READOUT noise. Scavino's boundary assumes ALL noise
+# scales, so on readout-heavy backends (Lagos) the analytic curve is
+# quantitatively wrong / can sign-flip. Use Manila (gate-dominated) as the
+# theory-comparison cells; treat Lagos as an empirical extension. For a clean
+# theory-validation cell, add a depolarizing-only backend (code TODO) where
+# folding == eps-scaling. This full-menu grid is for the in-context-refusal
+# figure; the BOUNDARY OVERLAY must use configs/boundary_pairwise.yaml
+# (techniques {raw, zne_fr}) — see Finding 2. Sim-only: never an ibm_* here.
+circuits:
+  families:
+    - layered_random
+    - hw_efficient_ansatz
+    - mirror_circuit
+  n_qubits: [2, 3, 4]
+  depths: [4, 8, 16]
+  seeds: [0, 1, 2]
+  # Source-level signal guarantee: rejection-sample sub-seeds so every emitted
+  # non-exempt circuit has |<Z^n>| >= 0.25 BEFORE any noisy work (mirror is
+  # exempt — its <Z^n> is seed-independent +1). Keeps the family mix balanced.
+  min_abs_ideal: 0.25
+backends:
+  # 10 noise environments: 2 devices x 5 scales. The scales sweep DOWN into
+  # the low-noise Heron-like regime (@x0.25, @x0.5) our earlier grids lacked,
+  # AND up (@x1.5, @x2.0) — a continuous eps axis within one topology, which
+  # is exactly what the boundary curve is plotted against.
+  - FakeManilaV2@x0.25   # low-noise (Heron-like)
+  - FakeManilaV2@x0.5
+  - FakeManilaV2         # 5q, low noise (x1.0 reference)
+  - FakeManilaV2@x1.5
+  - FakeManilaV2@x2.0
+  - FakeLagosV2@x0.25    # 7q, readout-dominated (q2 46.4%), dialed down
+  - FakeLagosV2@x0.5
+  - FakeLagosV2          # x1.0 reference
+  - FakeLagosV2@x1.5
+  - FakeLagosV2@x2.0
+# SHOTS AXIS: a LIST -> list-mode. Each budget becomes the innermost loop; the
+# boundary needs low budgets (where ZNE variance dominates and harms) through
+# high budgets (where ZNE bias reduction wins).
+shots: [256, 1024, 4096]
+pauli: auto              # 'auto' => 'Z' * n_qubits; mirror <Z^n> = +1 exactly
+min_abs_ideal: 0.25      # experiment-level screen (matches the source screen)
+techniques: [raw, raw_plus, zne, zne_fr, cdr, cdr_ridge, rem]
+feature_version: 2       # shots-aware features (log2_shots ...) — Angle 3 needs it

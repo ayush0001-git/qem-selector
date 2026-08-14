@@ -1,0 +1,36 @@
+# qemsel experiment config — SMALL dataset run
+# --------------------------------------------
+# 5 families x 2 qubit counts x 2 depths x 3 seeds = 60 circuits
+# x 2 backends = 120 (circuit, backend) units at 4000 base shots.
+# Purpose: first real labeled dataset for model prototyping.
+# Expect roughly an hour-scale run (CDR is 11x base shots per unit);
+# the run is crash-safe — re-running the same command resumes.
+#
+# base_seed = 0; seeds enumerate base_seed .. base_seed + 2.
+circuits:
+  families:
+    - layered_random
+    - near_clifford
+    - ghz_plus
+    - hw_efficient_ansatz
+    - mirror_circuit
+  n_qubits: [2, 3]
+  depths: [4, 8]
+  seeds: [0, 1, 2]
+backends:
+  - FakeManilaV2   # low readout error -> ZNE/CDR regime
+  - FakeLagosV2    # readout-dominated (q0 16.9%, q1 13.6%, q2 46.4%) -> REM regime
+shots: 4000
+# Per-family observables (science review 2026-07-21): GHZ states have
+# <Z...Z> = 0 for every ODD qubit count, so those rows carried no signal and
+# their winner labels were shot-noise lotteries. <X...X> = +1 on GHZ at
+# every size. Single-character specs repeat to the circuit width.
+pauli:
+  ghz_plus: X      # <X^n> = +1 on GHZ for every n (odd or even)
+  default: auto    # 'auto' => 'Z' * n_qubits per circuit
+# Skip circuits whose exact |ideal| is below this: noise biases measured
+# expectations toward 0, so near-zero ideals make every technique's error
+# pure shot noise and the winner label a lottery (~40% of rows pre-fix).
+# Skipped units are listed in <out>/skipped_low_signal.log.
+min_abs_ideal: 0.25
+techniques: [raw, zne, cdr, rem]

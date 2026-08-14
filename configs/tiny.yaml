@@ -1,0 +1,24 @@
+# qemsel experiment config — TINY smoke run
+# ------------------------------------------
+# 5 families x 1 qubit count x 1 depth x 2 seeds = 10 circuits
+# x 2 backends = 20 (circuit, backend) units at 2000 base shots.
+# Purpose: end-to-end pipeline check in minutes on a laptop
+# (CDR dominates cost: 11x base shots per unit).
+#
+# base_seed = 0; seeds enumerate base_seed .. base_seed + 1.
+circuits:
+  families:
+    - layered_random
+    - near_clifford
+    - ghz_plus
+    - hw_efficient_ansatz
+    - mirror_circuit
+  n_qubits: [2]
+  depths: [4]
+  seeds: [0, 1]
+backends:
+  - FakeManilaV2   # default low-noise reference
+  - FakeLagosV2    # readout-dominated (q0 16.9%, q1 13.6%, q2 46.4%) -> REM regime
+shots: 2000
+pauli: auto        # 'auto' => 'Z' * n_qubits per circuit
+techniques: [raw, zne, cdr, rem]

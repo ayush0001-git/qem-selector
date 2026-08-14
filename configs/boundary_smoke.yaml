@@ -1,0 +1,43 @@
+# qemsel experiment config — ANGLE 3 boundary SMOKE run (minutes)
+# ================================================================
+# Same SHAPE as configs/boundary.yaml (shots LIST -> list-mode, feature_version
+# 2, the zne_fr / cdr_ridge techniques, the low-noise @x dial) at a tiny size
+# for an end-to-end pipeline check on a laptop in minutes.
+#
+#   3 families x 1 qubit count x 1 depth x 1 seed   = 3 circuits
+#   x 4 backends (incl. the @x0.25 AND @x0.5
+#     low-noise dials)                              = 12 (circuit, backend) pairs
+#   x 2 shot budgets [256, 4096]                    = 24 units
+#   x 7 techniques.
+#
+# Exercises exactly the B4 shots-axis machinery: the base_shots column, the
+# per-budget resume key, per-budget aggregated.csv grouping, and the list-mode
+# errors.log field — plus feature_version 2 and the low-noise scale path.
+#
+# DEPENDENCIES: like boundary.yaml this RUNS end-to-end only once
+# feature_version 2 (B5) and the zne_fr / cdr_ridge dispatch (B1) land; until
+# then it validates but a run raises NotImplementedError from the collaborator.
+#
+# RUN (crash-safe; re-run to resume):
+#   & ".\.venv\Scripts\python.exe" scripts\run_experiment.py `
+#       --config configs\boundary_smoke.yaml --out results\boundary_smoke
+circuits:
+  families:
+    - layered_random
+    - hw_efficient_ansatz
+    - mirror_circuit
+  n_qubits: [2]
+  depths: [4]
+  seeds: [0]
+  min_abs_ideal: 0.25    # source-level signal guarantee (mirror is exempt)
+backends:
+  - FakeManilaV2@x0.25   # low-noise (Heron-like) dial-down
+  - FakeManilaV2@x0.5    # second dial-down point (integration check: raw error
+                         # must fall monotonically x1.0 -> x0.5 -> x0.25)
+  - FakeManilaV2         # x1.0 reference
+  - FakeLagosV2          # readout-dominated environment
+shots: [256, 4096]       # LIST -> list-mode (low + high budget)
+pauli: auto
+min_abs_ideal: 0.25
+techniques: [raw, raw_plus, zne, zne_fr, cdr, cdr_ridge, rem]
+feature_version: 2

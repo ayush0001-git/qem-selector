@@ -1,0 +1,22 @@
+# qemsel experiment config — default small demo (referenced by INTERFACES.md)
+# ---------------------------------------------------------------------------
+# 2-3 qubit circuits, FakeManilaV2 + FakeLagosV2, 2048 base shots.
+# For the graded run sizes use configs/tiny.yaml, small.yaml, full.yaml.
+#
+# base_seed = 0; seeds enumerate base_seed .. base_seed + 1.
+circuits:
+  families:
+    - layered_random
+    - near_clifford
+    - ghz_plus
+    - hw_efficient_ansatz
+    - mirror_circuit
+  n_qubits: [2, 3]
+  depths: [4, 8]
+  seeds: [0, 1]
+backends:
+  - FakeManilaV2
+  - FakeLagosV2
+shots: 2048
+pauli: auto        # 'auto' => 'Z' * n_qubits per circuit
+techniques: [raw, zne, cdr, rem]

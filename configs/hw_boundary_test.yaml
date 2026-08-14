@@ -1,0 +1,56 @@
+# qemsel config — ANGLE 3 HARDWARE boundary test (IBM Heron, real QPU)
+# =====================================================================
+# THE PAPER'S HEADLINE HARDWARE EXPERIMENT — ships UNCONFIRMED (safe).
+#
+# Idea: on ONE real device the noise is fixed, so the only axis you can
+# sweep on hardware is SHOTS. Scavino's finite-shot boundary predicts that
+# fixed-Richardson ZNE (zne_fr) flips from HARMFUL at low shots (variance
+# dominates) to HELPFUL at high shots (bias reduction wins). This run traces
+# that crossover on real hardware, on KNOWN-ANSWER mirror circuits
+# (<Z^n> = +1 exactly), so error is measured without ambiguity.
+#
+# PAIRWISE by construction (science-review Finding 2): techniques are
+# {raw, zne_fr} — best_technique IS the zne_fr-vs-raw label the theory
+# describes. `rem` is included as a cheap "what you should actually do"
+# contrast (it won 2/3 on the 2026-07-22 Heron run), but the BOUNDARY
+# comparison is raw-vs-zne_fr only.
+#
+# HONEST SCOPE (Finding 1): on hardware zne_fr can ONLY fold gates (readout
+# is untouched), exactly as the sim-side. On a low-readout Heron device the
+# gate-dominated assumption is closer to Scavino's than on Lagos — but STILL
+# disclose that readout bias is not amplified. This is motivating
+# preliminary evidence (few circuits, one device), not a validated study.
+#
+# COST (verify locally BEFORE flipping the gate):
+#   & ".\.venv\Scripts\python.exe" scripts\estimate_hardware_cost.py `
+#       --config configs\hw_boundary_test.yaml
+#   Rough hand-estimate (conservative 2 s/job + 1 ms/shot):
+#     2 mirror circuits (q2,q3) x 5 shot budgets x
+#       (raw 1 job + zne_fr 2 equal-split half-budget builds + rem 3 cal jobs)
+#     ~= 2 x 5 x 6 = 60 jobs; total shots per circuit-technique across budgets
+#     = 256+512+1024+2048+4096 = 7936; jobs overhead ~60 x 2 = 120 s,
+#     shot time ~ (2 circuits x (raw 7936 + zne_fr 7936 + rem 3x7936)) x 1 ms
+#     ~= 79 s. Total ~200 s (~3.3 min) of the 10 min/month free budget.
+#   If tighter budget is wanted: drop rem (boundary needs only raw+zne_fr),
+#   or drop the q3 circuit, or use shots [256, 1024, 4096] (3 budgets).
+circuits:
+  families:
+    - mirror_circuit    # known answer <Z^n> = +1 exactly — clean error measure
+  n_qubits: [2, 3]
+  depths: [4]
+  seeds: [0]
+backends:
+  # Heron device verified accessible 2026-07-22 (the earlier hw_first_run).
+  - ibm_marrakesh
+# SHOTS AXIS: a LIST -> the boundary crossover we are hunting. Low budgets
+# (256, 512) are where zne_fr variance should HARM; high budgets (4096) are
+# where its bias reduction should start to help.
+shots: [256, 512, 1024, 2048, 4096]
+pauli: auto              # 'auto' => 'Z' * n_qubits; mirror <Z^n> = +1 exactly
+min_abs_ideal: 0.25      # FREE local statevector screen BEFORE any hardware job
+techniques: [raw, zne_fr, rem]   # boundary = raw-vs-zne_fr; rem = practical contrast
+feature_version: 2
+# SAFETY GATE — your explicit consent to spend real QPU time. run_experiment
+# refuses ibm_* configs until you review the printed cost estimate and flip
+# this to true. Credentials must be in configs\hardware.yaml (gitignored).
+hardware_confirmed: true

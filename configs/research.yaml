@@ -1,0 +1,130 @@
+# qemsel experiment config — RESEARCH dataset run
+# ================================================
+# The paper-grade labeled dataset: bigger, noisier, seed-aggregatable, with
+# the equal-budget raw_plus baseline and the source-level circuit screen.
+#
+# SIZE
+#   5 families x 4 qubit counts x 3 depths x 3 seeds = 180 circuits
+#   x 9 backends (noise environments)               = 1620 units
+#   at 4096 base shots, all 5 techniques (raw, raw_plus, zne, cdr, rem).
+#   Source-level min_abs_ideal keeps the suite PERFECTLY balanced: verified
+#   180/180 circuits survive both screens, exactly 36 rows per family per
+#   backend-sweep (the small run's post-screen skew — ghz_plus/mirror 24 vs
+#   layered_random/near_clifford 8 — is gone).
+#
+# WALL-TIME BUDGET (target <= ~6 h; measured 2026-07-21 on this machine,
+# scripts in notes/suite-experiment-builder.md)
+#   Benchmarked ONE unit = all 5 techniques + executor build + exact ideal,
+#   hw_efficient_ansatz depth 8, 4096 shots:
+#     FakeManilaV2       n=3: 7.2s (first-call JIT)   n=5: 6.1s
+#     FakeManilaV2@x2.0  n=3: 3.5s                    n=5: 5.0s
+#     FakeLagosV2        n=3: 4.9s                    n=5: 7.0s
+#     FakeJakartaV2      n=3: 6.0s                    n=5: 7.7s
+#     FakeSherbrooke     n=3: 37.1s                   n=5: 49.4s  (127q Eagle)
+#   Blended per-unit estimate for the 9 small-device environments:
+#     CDR-viable families (layered_random, hw_efficient_ansatz, mirror):
+#       ~6.5s at d=8, x1.15 for the {4,8,16} depth mix  -> ~7 s
+#     CDR-refusing families (ghz_plus fully-Clifford, near_clifford
+#       degenerate-training — the fail-loud guards refuse BEFORE any noisy
+#       execution, saving CDR's 11 executions)          -> ~3 s
+#     family-blended: (3 x 7 + 2 x 3) / 5 ~= 5.4 s/unit
+#     (integration re-check 2026-07-21: fresh 45-unit smoke at n=3/d=8 ran
+#      89.9 s = 2.0 s/unit blended on an unloaded machine — the 5.4 s/unit
+#      grid blend, which also covers n=4-5 and d=16, is conservative.)
+#   TOTAL: 1620 units x 5.4 s ~= 8,750 s ~= 2.4 h
+#          with a x2 safety factor (n=4-5 routing on 7q H-topology, d=16
+#          transpile, background load) ~= 4.9 h  -> FINAL ESTIMATE ~5 h
+#          (integration-adjusted to sit inside the 4-6 h target window).
+#   FakeSherbrooke was measured 6-8x costlier per unit (37-50 s): adding it
+#   as a 10th environment would cost +180 x ~45 s ~= 2.3 h measured
+#   (~4.5 h with margin) and push the pessimistic total past 6 h — DROPPED
+#   without guilt per plan; revisit as a separate follow-up config if the
+#   run finishes early.
+#
+# WHAT THIS RUN FIXES vs configs/small.yaml (74 rows)
+#   * 9 noise environments instead of 2: Manila (low noise), Lagos
+#     (readout-dominated) AND Jakarta (mid noise, H-topology) each at noise
+#     scales 1.0/1.5/2.0 (backends.py scaled variants: depolarizing +
+#     readout errors scaled from the same calibration, so the two backend
+#     features become a real continuous axis across THREE topologies) —
+#     "more noise, bigger dataset".
+#   * Equal-budget baseline: raw_plus = plain averaging at 11x shots
+#     (= CDR's budget) — the empirical control reviewers asked for.
+#   * EXACTLY 3 seeds per configuration -> experiment.py writes
+#     aggregated.csv with seed-AVERAGED errors and winners (less label
+#     noise; 540 aggregate rows from 1620 per-seed rows).
+#   * Source-level min_abs_ideal (circuits.generate_suite): every
+#     layered_random / near_clifford / hw_efficient_ansatz circuit is
+#     deterministically re-seeded until |<Z^n>| >= 0.25, so the low-signal
+#     screen no longer skews the family mix. NOTE (fixer 2026-07-21): this
+#     conditions the random families on an atypically high-|<Z^n>| subset
+#     (worst for near_clifford); the report now discloses it user-facing.
+#     CDR signal (corrected, fixer 2026-07-21 — pre-guards run on all 180
+#     circuits): 1206/1620 units (74%) are non-refused, spanning ALL 5
+#     families — layered_random/hw_efficient_ansatz/mirror 36/36 circuits
+#     each, ghz_plus 11/36, near_clifford 15/36 (the earlier "972 units,
+#     3 families" note undersold it). Remaining ghz_plus/near_clifford
+#     refusals are honest and expected (near_clifford's non-Clifford
+#     content is all diagonal rz/T, which makes many CDR training sets
+#     degenerate — measured).
+#   * REM_MIN_DAMPING now 0.02: near-singular readout inversions (e.g.
+#     multi-qubit supports crossing Lagos q2's 46% readout error, worse at
+#     scale 1.5/2.0) refuse loudly instead of recording amplified noise.
+#
+# RUN (crash-safe; re-run the same command to resume):
+#   & ".\.venv\Scripts\python.exe" scripts\run_experiment.py `
+#       --config configs\research.yaml --out results\research
+#
+# base_seed = 0; seeds enumerate base_seed .. base_seed + 2. Bumped seeds
+# from source-level rejection sampling appear as seed + k*1000003 in
+# circuit_id/seed columns (deterministic; see circuits.generate_suite).
+circuits:
+  families:
+    - layered_random
+    - near_clifford
+    - ghz_plus
+    - hw_efficient_ansatz
+    - mirror_circuit
+  n_qubits: [2, 3, 4, 5]
+  depths: [4, 8, 16]
+  seeds: [0, 1, 2]
+  # Source-level signal guarantee (NEW): rejection-sample sub-seeds so every
+  # emitted non-exempt circuit has |<Z^n>| >= 0.25 BEFORE any noisy work.
+  # Verified: 180/180 circuits pass, 0 best-so-far warnings, ~1 s to
+  # generate. mirror_circuit/ghz_plus are exempt (seed-independent ideals).
+  min_abs_ideal: 0.25
+backends:
+  # 9 noise environments: 3 devices x 3 noise scales. '@x<scale>' scales
+  # the calibrated gate (depolarizing) and readout errors by <scale>
+  # (capped 0.9/0.45), so noise level varies CONTINUOUSLY within one
+  # topology — the model can finally learn a noise-level relationship
+  # instead of a backend ID. Symmetric design: every device contributes
+  # the same scale sweep, so DEVICE COMPOSITION is identical per scale.
+  # CAVEAT (fixer 2026-07-21): the nominal scale is NOT fully realized on
+  # cap-saturated devices — FakeLagosV2 q2 stores 46.4% readout error,
+  # above the 0.45 cap, so Lagos' realized avg readout error is ~1.28x /
+  # ~1.44x plain at nominal x1.5 / x2.0 (Manila/Jakarta scale exactly).
+  # Also, x1.0 runs the from_backend composite noise model while scaled
+  # variants run pure depolarizing+readout — the x1.0 -> x1.5 step changes
+  # noise CHARACTER too. Report section 5 prints realized error rates and
+  # both caveats; quote those, not the nominal dial.
+  - FakeManilaV2         # 5q, low noise (reference)
+  - FakeManilaV2@x1.5
+  - FakeManilaV2@x2.0
+  - FakeLagosV2          # 7q, readout-dominated (q0 16.9%, q1 13.6%, q2 46.4%)
+  - FakeLagosV2@x1.5
+  - FakeLagosV2@x2.0
+  - FakeJakartaV2        # 7q, mid noise, H-topology routing
+  - FakeJakartaV2@x1.5
+  - FakeJakartaV2@x2.0
+shots: 4096
+# Per-family observables: GHZ has <Z^n> = 0 for odd n; <X^n> = +1 at every
+# n. Single-character specs repeat to the circuit width.
+pauli:
+  ghz_plus: X
+  default: auto          # 'auto' => 'Z' * n_qubits
+# Experiment-level screen kept as the final honest filter (drops any
+# best-so-far straggler the source-level sampling could not fix; verified 0
+# such units on this exact grid — the two thresholds match on purpose).
+min_abs_ideal: 0.25
+techniques: [raw, raw_plus, zne, cdr, rem]

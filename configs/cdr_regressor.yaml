@@ -1,0 +1,24 @@
+# qemsel experiment config — ANGLE 2 CDR regressor sweep
+# =======================================================
+# Purpose: map out when nonlinear CDR (cdr_rf) beats linear CDR (cdr_ridge/cdr)
+# across 5 heterogeneous circuit families and noise environments.
+# This data feeds the 2D crossover heatmap.
+circuits:
+  families:
+    - layered_random
+    - near_clifford
+    - ghz_plus
+    - hw_efficient_ansatz
+    - mirror_circuit
+  n_qubits: [2, 3, 4]
+  depths: [4, 8, 16]
+  seeds: [0, 1, 2]
+  min_abs_ideal: 0.25
+backends:
+  - FakeManilaV2
+  - FakeLagosV2
+shots: 4096
+pauli: auto
+min_abs_ideal: 0.25
+techniques: [raw, cdr, cdr_ridge, cdr_rf]
+feature_version: 2

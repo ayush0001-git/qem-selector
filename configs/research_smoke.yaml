@@ -1,0 +1,61 @@
+# qemsel experiment config — RESEARCH SMOKE test
+# ===============================================
+# Same SHAPE as configs/research.yaml, minutes not hours — for integrator /
+# tester end-to-end runs before committing to the full research sweep.
+# Exercises every research-run feature at least once:
+#   * all 5 families (incl. per-family pauli: ghz_plus -> X),
+#   * BOTH min_abs_ideal layers (source-level rejection sampling in
+#     circuits.generate_suite + the experiment-level screen),
+#   * a plain AND an '@x<scale>' noise-scaled backend name,
+#   * all 5 techniques incl. the raw_plus equal-budget baseline,
+#   * EXACTLY 3 seeds -> aggregated.csv real seed-averaging (n_seeds=3),
+#   * honest CDR refusals (ghz_plus / near_clifford rows).
+#
+# SIZE / TIME (measured basis in configs/research.yaml header):
+#   5 families x 1 qubit count x 1 depth x 3 seeds = 15 circuits
+#   x 3 backends = 45 units at 4096 shots.
+#   MEASURED 2026-07-21: 30 units in 101.8 s wall (3.4 s/unit blended at
+#   n=3) before plain FakeLagosV2 was added; budget <= ~6 min with margin.
+#   (Kept at 3 seeds rather than 1 so the aggregation path is genuinely
+#   exercised. Plain FakeLagosV2 added at integration so the run contains a
+#   scaled backend AND its x1.0 sibling — the "scaled noise really is
+#   noisier" check needs both in one dataset.)
+#
+# RUN:
+#   & ".\.venv\Scripts\python.exe" scripts\run_experiment.py `
+#       --config configs\research_smoke.yaml --out results\research_smoke
+#
+# Expected outputs in results\research_smoke\: results.csv (45 rows),
+# aggregated.csv (15 rows, n_seeds=3; since the fixer pass 2026-07-21 it
+# also carries seed-mean feat_* columns and per-technique <tech>_n_seeds,
+# and winners are restricted to maximum-seed-coverage techniques — cdr can
+# no longer win a group from its single non-refused seed), errors.log
+# containing ONLY intentional refusals — [cdr] on near_clifford (9/9) and
+# ghz_plus (6/9; degenerate training-ideal spread) and occasionally [rem]
+# on Lagos/Lagos@x1.5 (readout damping under the 0.02 floor) — and
+# skipped_low_signal.log absent. Train the headline model on
+# aggregated.csv (seed-averaged labels), e.g.:
+#   & ".\.venv\Scripts\python.exe" scripts\train_model.py `
+#       --data results\research_smoke\aggregated.csv `
+#       --out results\research_smoke --label both
+circuits:
+  families:
+    - layered_random
+    - near_clifford
+    - ghz_plus
+    - hw_efficient_ansatz
+    - mirror_circuit
+  n_qubits: [3]
+  depths: [8]
+  seeds: [0, 1, 2]
+  min_abs_ideal: 0.25
+backends:
+  - FakeManilaV2         # plain name path
+  - FakeLagosV2          # x1.0 sibling of the scaled variant below
+  - FakeLagosV2@x1.5     # noise-scaled path (readout-dominated, scaled up)
+shots: 4096
+pauli:
+  ghz_plus: X
+  default: auto
+min_abs_ideal: 0.25
+techniques: [raw, raw_plus, zne, cdr, rem]

@@ -1,0 +1,18 @@
+# Virtual environment
+.venv/
+
+# Run outputs (regenerable; can be large)
+data/
+models/
+results/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Packaging / test caches
+*.egg-info/
+.pytest_cache/
+
+# Secrets: IBM Quantum API token lives here — never commit it
+configs/hardware.yaml

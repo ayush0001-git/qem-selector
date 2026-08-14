@@ -1,0 +1,42 @@
+# qemsel experiment config — FULL dataset run
+# -------------------------------------------
+# 5 families x 4 qubit counts x 3 depths x 3 seeds = 180 circuits (~200)
+# x 4 backends = 720 (circuit, backend) units at 8000 base shots
+# (minus units skipped by min_abs_ideal low-signal screening, see below).
+# Purpose: the final labeled dataset for training + report.
+# This is a MANY-HOURS run — rely on crash-safe resume (re-run the same
+# command; completed (circuit, backend) units are skipped automatically).
+# n_qubits max is 5 because FakeManilaV2 has exactly 5 qubits.
+#
+# base_seed = 0; seeds enumerate base_seed .. base_seed + 2.
+circuits:
+  families:
+    - layered_random
+    - near_clifford
+    - ghz_plus
+    - hw_efficient_ansatz
+    - mirror_circuit
+  n_qubits: [2, 3, 4, 5]
+  depths: [4, 8, 16]
+  seeds: [0, 1, 2]
+backends:
+  - FakeManilaV2   # 5q, low noise reference
+  - FakeJakartaV2  # 7q, mid noise
+  - FakeLagosV2    # 7q, readout-dominated (q0 16.9%, q1 13.6%, q2 46.4%) -> REM regime
+  - FakeSherbrooke # 127q Eagle calibration data
+shots: 8000
+# Per-family observables (science review 2026-07-21): GHZ states have
+# <Z...Z> = 0 for every ODD qubit count (18/36 ghz_plus circuits here), so
+# those rows carried no signal and their winner labels were shot-noise
+# lotteries. <X...X> = +1 on GHZ at every size. Single-character specs
+# repeat to the circuit width.
+pauli:
+  ghz_plus: X      # <X^n> = +1 on GHZ for every n (odd or even)
+  default: auto    # 'auto' => 'Z' * n_qubits per circuit
+# Skip circuits whose exact |ideal| is below this: noise biases measured
+# expectations toward 0, so near-zero ideals make every technique's error
+# pure shot noise and the winner label a lottery (42% of the pre-fix full
+# suite had |ideal| < 0.1). Skipped units are listed in
+# <out>/skipped_low_signal.log — state the screening in the paper.
+min_abs_ideal: 0.25
+techniques: [raw, zne, cdr, rem]

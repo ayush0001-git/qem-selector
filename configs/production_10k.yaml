@@ -1,0 +1,41 @@
+# qemsel experiment config — Production-scale 20,000+ unit sweep
+# =============================================================
+# A massive production configuration dataset designed to scale the error mitigation
+# selector across 5 circuit families, 4 qubit sizes, 4 depths, 5 seeds, 10 noise scales,
+# and 5 shot budgets.
+#
+# Total Units: 5 families x 4 qubits x 4 depths x 5 seeds x 10 backends x 5 budgets = 20,000 units.
+# 
+# Run from the terminal in the background:
+#   python scripts/run_experiment.py --config configs/production_10k.yaml --out results/production_10k
+#
+# Note: This is a crash-safe run; if you interrupt it or your computer restarts,
+# rerun the same command to resume from where it stopped.
+#
+circuits:
+  families:
+    - layered_random
+    - hw_efficient_ansatz
+    - mirror_circuit
+    - near_clifford
+    - ghz_plus
+  n_qubits: [2, 3, 4, 5]
+  depths: [4, 8, 12, 16]
+  seeds: [0, 1, 2, 3, 4]
+  min_abs_ideal: 0.25
+backends:
+  - FakeManilaV2@x0.25
+  - FakeManilaV2@x0.5
+  - FakeManilaV2
+  - FakeManilaV2@x1.5
+  - FakeManilaV2@x2.0
+  - FakeLagosV2@x0.25
+  - FakeLagosV2@x0.5
+  - FakeLagosV2
+  - FakeLagosV2@x1.5
+  - FakeLagosV2@x2.0
+shots: [256, 512, 1024, 2048, 4096]
+pauli: auto
+min_abs_ideal: 0.25
+techniques: [raw, raw_plus, zne, zne_fr, cdr, cdr_ridge, rem]
+feature_version: 2

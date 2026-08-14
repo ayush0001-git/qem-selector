@@ -1,0 +1,23 @@
+# qemsel experiment config — ANGLE 2 CDR regressor SMOKE run
+# ============================================================
+# Same SHAPE as configs/cdr_regressor.yaml at a tiny size for an end-to-end
+# pipeline check on a laptop in minutes.
+circuits:
+  families:
+    - layered_random
+    - near_clifford
+    - ghz_plus
+    - hw_efficient_ansatz
+    - mirror_circuit
+  n_qubits: [2]
+  depths: [4]
+  seeds: [0]
+  min_abs_ideal: 0.25
+backends:
+  - FakeManilaV2
+  - FakeLagosV2
+shots: 1024
+pauli: auto
+min_abs_ideal: 0.25
+techniques: [raw, cdr, cdr_ridge, cdr_rf]
+feature_version: 2

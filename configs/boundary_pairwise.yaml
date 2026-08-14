@@ -1,0 +1,68 @@
+# qemsel experiment config — ANGLE 3 boundary sweep, PAIRWISE labels
+# =====================================================================
+# WHY THIS EXISTS (science review FINDING 2, 2026-07-23):
+#   The analytic help-harm boundary (Scavino arXiv:2605.08251) describes ONE
+#   thing: does zne_fr beat RAW, pairwise, at equal budget? But a FULL-menu
+#   selector (configs/boundary.yaml, techniques raw/raw_plus/zne/zne_fr/cdr/
+#   cdr_ridge/rem) labels each row by argmax over the WHOLE menu — and zne_fr
+#   almost never wins that (cdr wins ~84% of its accepted rows; on the
+#   boundary_smoke grid zne_fr won 0/24 menu rows). So a full-menu overlay
+#   reports a VACUOUS "agreement" that is just the theory's harm-share, and
+#   the trained bundle cannot even emit a ZNE label. A referee kills that.
+#
+#   The fix is configuration-level, not code: restrict the technique list to
+#   {raw, zne_fr} so `best_technique` IS the pairwise zne_fr-vs-raw label the
+#   theory predicts. THIS is the config the Angle-3 overlay must be built on.
+#   (Keep the full-menu boundary.yaml for the separate "in-context refusal"
+#   figure, if wanted — but never for the boundary overlay itself.)
+#
+# STILL OPEN — read before you quote an agreement number (FINDING 1 & 4):
+#   zne_fr amplifies noise by GATE FOLDING (fold_global) — it cannot touch
+#   READOUT noise. Scavino's boundary assumes ALL noise is amplified. On
+#   readout-heavy backends (FakeLagosV2, readout/2q ~13.9) the analytic curve
+#   is quantitatively wrong and can sign-flip (says HELP where zne_fr harms).
+#   So the analytic curve is NOT clean "external ground truth" on Lagos.
+#   The cleanest theory-validation cell is a DEPOLARIZING-ONLY synthetic
+#   model (where folding == eps-scaling) — that backend variant does not yet
+#   exist in backends.py (a code TODO). Until it does:
+#     * treat Manila (readout/2q ~3.7, gate-dominated) points as the
+#       theory-comparison cells;
+#     * treat Lagos points as an EMPIRICAL extension, not theory validation;
+#     * always plot the boundary against REALIZED get_backend_info error
+#       rates, per device (Finding 4: a single (eps,B) curve cannot span both
+#       devices — use per-device overlays).
+#   This is honest, publishable scope — just do not overclaim "the model
+#   rediscovered the physics boundary" globally; claim it on the
+#   gate-dominated cells and show the readout cells as the interesting
+#   deviation.
+#
+# GRID: same (circuit x backend x shots) grid as boundary.yaml, but only 2
+# techniques per unit, so it runs much cheaper (~2/7 of the per-unit
+# technique cost). Crash-safe/resumable. Sim-only — never an ibm_* backend.
+circuits:
+  families:
+    - layered_random
+    - hw_efficient_ansatz
+    - mirror_circuit
+  n_qubits: [2, 3, 4]
+  depths: [4, 8, 16]
+  seeds: [0, 1, 2]
+  min_abs_ideal: 0.25
+backends:
+  # Manila = gate-dominated (theory-comparison cells).
+  - FakeManilaV2@x0.25
+  - FakeManilaV2@x0.5
+  - FakeManilaV2
+  - FakeManilaV2@x1.5
+  - FakeManilaV2@x2.0
+  # Lagos = readout-dominated (empirical extension, NOT theory validation).
+  - FakeLagosV2@x0.25
+  - FakeLagosV2@x0.5
+  - FakeLagosV2
+  - FakeLagosV2@x1.5
+  - FakeLagosV2@x2.0
+shots: [256, 1024, 4096]
+pauli: auto
+min_abs_ideal: 0.25
+techniques: [raw, zne_fr]   # PAIRWISE — the label the analytic boundary predicts
+feature_version: 2          # shots-aware features (log2_shots ...) — Angle 3 needs it

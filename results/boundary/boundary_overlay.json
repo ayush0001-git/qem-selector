@@ -1,0 +1,285 @@
+{
+  "agreement_pct": 63.333333333333336,
+  "iou_help": 0.0,
+  "n_points": 30,
+  "selector_help_share": 0.0,
+  "theory_help_share": 0.36666666666666664,
+  "eps_feature": "avg_2q_error",
+  "zne_labels": [
+    "zne",
+    "zne_fr"
+  ],
+  "plot_path": "results\\boundary\\boundary_overlay.png",
+  "grid": [
+    {
+      "backend": "FakeManilaV2@x0.25",
+      "eps": 0.002488656011702565,
+      "shots": 256,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "harm",
+      "delta_mse": -0.46533486286777903
+    },
+    {
+      "backend": "FakeManilaV2@x0.25",
+      "eps": 0.002488656011702565,
+      "shots": 1024,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "harm",
+      "delta_mse": -0.11319165391738928
+    },
+    {
+      "backend": "FakeManilaV2@x0.25",
+      "eps": 0.002488656011702565,
+      "shots": 4096,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "harm",
+      "delta_mse": -0.025155851679791827
+    },
+    {
+      "backend": "FakeManilaV2@x0.5",
+      "eps": 0.00497731202340513,
+      "shots": 256,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "harm",
+      "delta_mse": -0.42967055457014725
+    },
+    {
+      "backend": "FakeManilaV2@x0.5",
+      "eps": 0.00497731202340513,
+      "shots": 1024,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "harm",
+      "delta_mse": -0.09635069260475793
+    },
+    {
+      "backend": "FakeManilaV2@x0.5",
+      "eps": 0.00497731202340513,
+      "shots": 4096,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "harm",
+      "delta_mse": -0.013020727113410596
+    },
+    {
+      "backend": "FakeManilaV2",
+      "eps": 0.00995462404681026,
+      "shots": 256,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "harm",
+      "delta_mse": -0.3777448666006816
+    },
+    {
+      "backend": "FakeManilaV2",
+      "eps": 0.00995462404681026,
+      "shots": 1024,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "harm",
+      "delta_mse": -0.05154807137843805
+    },
+    {
+      "backend": "FakeManilaV2",
+      "eps": 0.00995462404681026,
+      "shots": 4096,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "help",
+      "delta_mse": 0.030001127427122833
+    },
+    {
+      "backend": "FakeManilaV2@x1.5",
+      "eps": 0.014931936070215389,
+      "shots": 256,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "harm",
+      "delta_mse": -0.283147583412099
+    },
+    {
+      "backend": "FakeManilaV2@x1.5",
+      "eps": 0.014931936070215389,
+      "shots": 1024,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "harm",
+      "delta_mse": -0.0018033408784310506
+    },
+    {
+      "backend": "FakeManilaV2@x1.5",
+      "eps": 0.014931936070215389,
+      "shots": 4096,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "help",
+      "delta_mse": 0.06853271975498593
+    },
+    {
+      "backend": "FakeManilaV2@x2.0",
+      "eps": 0.01990924809362052,
+      "shots": 256,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "harm",
+      "delta_mse": -0.21037440057781154
+    },
+    {
+      "backend": "FakeManilaV2@x2.0",
+      "eps": 0.01990924809362052,
+      "shots": 1024,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "help",
+      "delta_mse": 0.050459608471493236
+    },
+    {
+      "backend": "FakeManilaV2@x2.0",
+      "eps": 0.01990924809362052,
+      "shots": 4096,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "help",
+      "delta_mse": 0.11566811073381943
+    },
+    {
+      "backend": "FakeLagosV2@x0.25",
+      "eps": 0.00365874368658501,
+      "shots": 256,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "harm",
+      "delta_mse": -1.0401404754065093
+    },
+    {
+      "backend": "FakeLagosV2@x0.25",
+      "eps": 0.00365874368658501,
+      "shots": 1024,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "harm",
+      "delta_mse": -0.2254438037264076
+    },
+    {
+      "backend": "FakeLagosV2@x0.25",
+      "eps": 0.00365874368658501,
+      "shots": 4096,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "harm",
+      "delta_mse": -0.021769635806382123
+    },
+    {
+      "backend": "FakeLagosV2@x0.5",
+      "eps": 0.00731748737317002,
+      "shots": 256,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "harm",
+      "delta_mse": -0.8150619924333894
+    },
+    {
+      "backend": "FakeLagosV2@x0.5",
+      "eps": 0.00731748737317002,
+      "shots": 1024,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "harm",
+      "delta_mse": -0.09920954002781249
+    },
+    {
+      "backend": "FakeLagosV2@x0.5",
+      "eps": 0.00731748737317002,
+      "shots": 4096,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "help",
+      "delta_mse": 0.07975357307358173
+    },
+    {
+      "backend": "FakeLagosV2",
+      "eps": 0.01463497474634004,
+      "shots": 256,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "harm",
+      "delta_mse": -0.413788770557091
+    },
+    {
+      "backend": "FakeLagosV2",
+      "eps": 0.01463497474634004,
+      "shots": 1024,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "help",
+      "delta_mse": 0.14057146301790005
+    },
+    {
+      "backend": "FakeLagosV2",
+      "eps": 0.01463497474634004,
+      "shots": 4096,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "help",
+      "delta_mse": 0.2791615214116478
+    },
+    {
+      "backend": "FakeLagosV2@x1.5",
+      "eps": 0.02195246211951006,
+      "shots": 256,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "harm",
+      "delta_mse": -0.1629232460985076
+    },
+    {
+      "backend": "FakeLagosV2@x1.5",
+      "eps": 0.02195246211951006,
+      "shots": 1024,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "help",
+      "delta_mse": 0.24008944455076667
+    },
+    {
+      "backend": "FakeLagosV2@x1.5",
+      "eps": 0.02195246211951006,
+      "shots": 4096,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "help",
+      "delta_mse": 0.34084261721308523
+    },
+    {
+      "backend": "FakeLagosV2@x2.0",
+      "eps": 0.02926994949268008,
+      "shots": 256,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "harm",
+      "delta_mse": -0.006319625777325089
+    },
+    {
+      "backend": "FakeLagosV2@x2.0",
+      "eps": 0.02926994949268008,
+      "shots": 1024,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "help",
+      "delta_mse": 0.3157035958641723
+    },
+    {
+      "backend": "FakeLagosV2@x2.0",
+      "eps": 0.02926994949268008,
+      "shots": 4096,
+      "selector_zne": false,
+      "zne_vote_share": 0.0,
+      "theory_regime": "help",
+      "delta_mse": 0.3962094012745466
+    }
+  ]
+}

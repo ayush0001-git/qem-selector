@@ -1,0 +1,18 @@
+# QEM-Selector — exact resolved versions (pip freeze, filtered to main packages)
+# Environment: Python 3.12.3, Windows 11, venv at .venv
+# Note: ply is required by cirq's QASM importer, which mitiq's qiskit frontend
+# uses for circuit conversion — it is NOT pulled in automatically by mitiq.
+cirq-core==1.6.1
+joblib==1.5.3
+matplotlib==3.11.1
+mitiq==1.0.0
+numpy==2.2.6
+pandas==2.3.3
+ply==3.11
+pytest==9.1.1
+PyYAML==6.0.3
+qiskit==2.5.0
+qiskit-aer==0.17.2
+qiskit-ibm-runtime==0.48.0
+scikit-learn==1.9.0
+scipy==1.17.1

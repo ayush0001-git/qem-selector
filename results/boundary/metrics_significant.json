@@ -1,0 +1,164 @@
+{
+  "best_model_name": "gradient_boosting",
+  "accuracy": 0.8209876543209876,
+  "macro_f1": 0.2523779668607255,
+  "baseline_accuracy": 0.8679012345679012,
+  "labels": [
+    "cdr",
+    "cdr_ridge",
+    "raw_plus",
+    "rem",
+    "tie"
+  ],
+  "confusion_matrix": [
+    [
+      6,
+      0,
+      0,
+      1,
+      23
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      5
+    ],
+    [
+      0,
+      0,
+      0,
+      1,
+      5
+    ],
+    [
+      3,
+      0,
+      0,
+      4,
+      59
+    ],
+    [
+      3,
+      6,
+      1,
+      38,
+      655
+    ]
+  ],
+  "feature_importances": {
+    "feat_n_qubits": -0.002111111111111117,
+    "feat_depth": -0.006244444444444452,
+    "feat_n_1q_gates": -0.002488888888888905,
+    "feat_n_2q_gates": -0.00226666666666667,
+    "feat_n_cnot": -0.0012000000000000166,
+    "feat_n_non_clifford": -0.004666666666666668,
+    "feat_clifford_fraction": -0.005777777777777809,
+    "feat_depth_per_qubit": -0.008533333333333356,
+    "feat_backend_avg_2q_error": -0.011133333333333361,
+    "feat_backend_avg_readout_error": -0.005333333333333358,
+    "feat_log2_shots": 0.007799999999999975,
+    "feat_n_2q_layers": -0.001333333333333342,
+    "feat_entangling_density": 0.0008222222222221958,
+    "feat_mean_rz_angle_dist": -0.006044444444444458,
+    "feat_backend_avg_1q_error": -0.0010222222222222444
+  },
+  "feature_importances_note": "held-out (mean over CV folds)",
+  "per_model": {
+    "random_forest": {
+      "accuracy": 0.8,
+      "accuracy_std": 0.06978980788016699,
+      "macro_f1": 0.1886796467709331
+    },
+    "gradient_boosting": {
+      "accuracy": 0.8209876543209876,
+      "accuracy_std": 0.03842099477507283,
+      "macro_f1": 0.2523779668607255
+    },
+    "dummy_majority": {
+      "accuracy": 0.8679012345679012,
+      "accuracy_std": 0.03585292315509895,
+      "macro_f1": 0.18585591539986782
+    }
+  },
+  "n_samples": 810,
+  "cv_n_samples": 810,
+  "cv_folds": 5,
+  "cv_grouping": "stratified_group",
+  "dropped_classes": [],
+  "label_column": "best_technique_significant",
+  "lofo": {
+    "accuracy": 0.8037037037037037,
+    "macro_f1": 0.21694930845827348,
+    "per_family_accuracy": {
+      "hw_efficient_ansatz": 0.8333333333333334,
+      "layered_random": 0.7814814814814814,
+      "mirror_circuit": 0.7962962962962963
+    },
+    "per_family_macro_f1": {
+      "hw_efficient_ansatz": 0.24278508332542437,
+      "layered_random": 0.23314285714285715,
+      "mirror_circuit": 0.1780538302277433
+    },
+    "n_families": 3
+  },
+  "lobo": {
+    "accuracy": 0.8604938271604938,
+    "macro_f1": 0.4184900032156471,
+    "per_backend_accuracy": {
+      "FakeLagosV2": 0.8148148148148148,
+      "FakeLagosV2@x0.25": 0.8395061728395061,
+      "FakeLagosV2@x0.5": 0.7901234567901234,
+      "FakeLagosV2@x1.5": 0.7654320987654321,
+      "FakeLagosV2@x2.0": 0.7407407407407407,
+      "FakeManilaV2": 0.9629629629629629,
+      "FakeManilaV2@x0.25": 0.9135802469135802,
+      "FakeManilaV2@x0.5": 0.9135802469135802,
+      "FakeManilaV2@x1.5": 0.9259259259259259,
+      "FakeManilaV2@x2.0": 0.9382716049382716
+    },
+    "per_backend_macro_f1": {
+      "FakeLagosV2": 0.4484126984126984,
+      "FakeLagosV2@x0.25": 0.35147392290249435,
+      "FakeLagosV2@x0.5": 0.2942528735632184,
+      "FakeLagosV2@x1.5": 0.37189126662810873,
+      "FakeLagosV2@x2.0": 0.3056959261338823,
+      "FakeManilaV2": 0.776036866359447,
+      "FakeManilaV2@x0.25": 0.6351336955363801,
+      "FakeManilaV2@x0.5": 0.46341059602649004,
+      "FakeManilaV2@x1.5": 0.32051282051282054,
+      "FakeManilaV2@x2.0": 0.49193548387096775
+    },
+    "n_backends": 10
+  },
+  "lodo": {
+    "accuracy": 0.8135802469135802,
+    "macro_f1": 0.25720387319273114,
+    "per_device_accuracy": {
+      "FakeLagosV2": 0.7802469135802469,
+      "FakeManilaV2": 0.8469135802469135
+    },
+    "per_device_macro_f1": {
+      "FakeLagosV2": 0.22483532775600973,
+      "FakeManilaV2": 0.29720582447855176
+    },
+    "n_devices": 2
+  },
+  "loso": {
+    "accuracy": 0.8222222222222222,
+    "macro_f1": 0.354481343553847,
+    "per_budget_accuracy": {
+      "1024": 0.837037037037037,
+      "256": 0.8629629629629629,
+      "4096": 0.7666666666666667
+    },
+    "per_budget_macro_f1": {
+      "1024": 0.3011164274322169,
+      "256": 0.301656524678837,
+      "4096": 0.3412163446309788
+    },
+    "n_budgets": 3
+  },
+  "feature_version": 2
+}

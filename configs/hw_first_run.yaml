@@ -1,0 +1,42 @@
+# qemsel config — FIRST REAL-HARDWARE RUN (IBM Quantum Open Plan, free tier)
+# ---------------------------------------------------------------------------
+# Designed to fit comfortably inside ~2 QPU-minutes of the free plan's
+# 10 minutes/month:
+#
+#   2 families x n_qubits {2,3} x 1 depth x 1 seed = 4 circuits
+#   x 1 real backend = 4 units
+#   x (raw 1 + zne 3 + rem 3) = 7 single-circuit jobs per unit
+#   = 28 jobs. Conservative estimate (2 s/job overhead + 1 ms/shot):
+#   28 x (2 + 1024*0.001) s  ~= 85 s  (~1.4 min). Verify yourself with:
+#
+#     python scripts\estimate_hardware_cost.py --config configs\hw_first_run.yaml
+#
+# CDR is EXCLUDED ON PURPOSE: its 11x cost (1 target + 10 near-Clifford
+# training-circuit executions per unit) would add 44 more jobs (~+2.2 min)
+# and nearly triple the bill. Benchmark CDR on hardware only later, with a
+# dedicated budget check.
+#
+# Want more data once this works? Add seeds [0, 1] (8 circuits, ~2.8 min) —
+# re-check with the estimator first.
+circuits:
+  families:
+    - mirror_circuit    # known answer: <Z...Z> = +1 exactly -> hardware sanity anchor
+    - layered_random    # generic non-Clifford workload
+  n_qubits: [2, 3]
+  depths: [4]
+  seeds: [0]
+backends:
+  # Verified accessible on this account 2026-07-21 (queue depth 1 at check time):
+  - ibm_marrakesh
+shots: 1024
+pauli: auto             # 'auto' => 'Z' * n_qubits per circuit
+min_abs_ideal: 0.25     # screens low-signal circuits via a FREE local statevector
+                        # check BEFORE any hardware job (can only lower the cost)
+techniques: [raw, zne, rem]   # cdr excluded: 11x cost — see header comment
+# SAFETY GATE — your explicit consent to spend real QPU time. run_experiment
+# refuses ibm_* configs until you review the printed cost estimate and flip
+# this to true. Credentials must be in configs\hardware.yaml (gitignored).
+hardware_confirmed: false  # ships UNCONFIRMED (safe default). The 2026-07-22 Heron run
+                           # (ibm_marrakesh, ~85 QPU-s — see END_RESULT F7) is complete;
+                           # reverted to false so the repo never ships a hardware-armed config.
+                           # To run again: review the estimator, then flip to true locally.
