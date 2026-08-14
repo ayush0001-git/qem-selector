@@ -71,7 +71,7 @@ Under first-order Richardson extrapolation ($p=1$):
 #### Empirical Verification of the ZNE Boundary:
 To verify that our model successfully learned this physical boundary from data alone, we analyzed its decisions across the phase space of **Shot Budget $M$** (x-axis) vs. **Backend Noise Level $S$** (y-axis). The results are visualised in the following boundary overlay plot:
 
-![ZNE Help-Harm Boundary Overlay](https://raw.githubusercontent.com/ayush0001-git/qem-selector/main/results/boundary/boundary_overlay.png)
+![ZNE Help-Harm Boundary Overlay](https://raw.githubusercontent.com/ayush0001-git/qem-selector/master/results/boundary/boundary_overlay.png)
 
 * **Feature Importance Verification:** Permutation feature importance analysis of the production-trained selector confirms that shot budget is a primary decision driver:
   1. `feat_clifford_fraction` (Clifford density): **0.0310**
