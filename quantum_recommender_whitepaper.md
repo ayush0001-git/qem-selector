@@ -71,7 +71,7 @@ Under first-order Richardson extrapolation ($p=1$):
 #### Empirical Verification of the ZNE Boundary:
 To verify that our model successfully learned this physical boundary from data alone, we analyzed its decisions across the phase space of **Shot Budget $M$** (x-axis) vs. **Backend Noise Level $S$** (y-axis). The results are visualised in the following boundary overlay plot:
 
-![ZNE Help-Harm Boundary Overlay](https://raw.githubusercontent.com/ayush0001-git/qem-selector/master/results/boundary/boundary_overlay.png)
+![ZNE Help-Harm Boundary Overlay](https://raw.githubusercontent.com/ayush0001-git/qem-selector/master/docs/assets/boundary_overlay.png)
 
 * **Feature Importance Verification:** Permutation feature importance analysis of the production-trained selector confirms that shot budget is a primary decision driver:
   1. `feat_clifford_fraction` (Clifford density): **0.0310**
@@ -87,25 +87,25 @@ To verify that our model successfully learned this physical boundary from data a
 ### 3.3 Cost-Aware Formulation & $\lambda$-Sensitivity sweep
 Instead of minimizing absolute error, we defined a cost-adjusted loss metric $L_\lambda$ incorporating a shot-cost penalty weight $\lambda$:
 $$L_\lambda = |E_{mit} - E_{ideal}| + \lambda \frac{N_{shots}}{M_{budget}}$$
-where $N_{shots}$ represents the total shots consumed (including calibration and training circuits) and $M_{budget}$ is the baseline budget. The relative costs of our techniques are: `raw`/`raw_plus` = 1.0, `zne_fr` = 2.0, `zne` = 3.0, `rem` = 5.0, and `cdr`/`cdr_ridge` = 11.0. 
+where $N_{shots}$ represents the total shots consumed (including calibration and training circuits) and $M_{budget}$ is the baseline budget. The relative costs of our techniques in the codebase are: `raw` = 1.0, `zne_fr` = 1.0 (under default equal split allocation), `zne` = 3.0, `rem` = 3.0, `raw_plus` = 11.0, and `cdr`/`cdr_ridge` = 11.0. 
 
-To evaluate how the cost parameter $\lambda$ regulates resource usage, we swept $\lambda$ from 0.0 to 0.04 across the 12,786 valid configurations. The resulting selection shares are detailed below:
+To evaluate how the cost parameter $\lambda$ regulates resource usage, we swept $\lambda$ from 0.0 to 0.04 across the 1,620 research configuration runs. The resulting selection shares are detailed below:
 
-| Penalty ($\lambda$) | RAW/RAW+ Share | ZNE/ZNE-FR Share | CDR/Ridge Share | REM Share |
+| Penalty ($\lambda$) | RAW/RAW+ Share | ZNE Share | CDR Share | REM Share |
 | :--- | :---: | :---: | :---: | :---: |
-| **0.0000** (Accuracy-at-all-cost) | 3.9% | 10.3% | **65.1%** | 20.7% |
-| **0.0050** | 8.4% | 17.7% | **43.8%** | 30.1% |
-| **0.0100** | 12.8% | 22.3% | **30.2%** | 34.6% |
-| **0.0150** | 18.0% | 25.0% | **21.9%** | 35.1% |
-| **0.0200** | 23.4% | 25.5% | **16.8%** | 34.2% |
-| **0.0250** | 28.9% | 25.6% | **13.0%** | 32.4% |
-| **0.0300** | 34.2% | 25.0% | **10.5%** | 30.3% |
-| **0.0350** | 39.6% | 23.9% | **8.4%** | 28.1% |
-| **0.0400** (High-resource-penalty) | 45.1% | 22.5% | **6.7%** | 25.8% |
+| **0.0000** (Accuracy-at-all-cost) | 3.0% | 4.8% | **62.2%** | 29.9% |
+| **0.0050** | 4.6% | 6.8% | **49.3%** | 39.3% |
+| **0.0100** | 7.3% | 8.3% | **35.9%** | 48.5% |
+| **0.0150** | 9.4% | 10.6% | **24.9%** | 55.1% |
+| **0.0200** | 12.2% | 11.2% | **18.0%** | 58.7% |
+| **0.0250** | 16.0% | 10.6% | **13.8%** | 59.6% |
+| **0.0300** | 19.9% | 9.9% | **11.2%** | 58.9% |
+| **0.0350** | 23.6% | 8.9% | **9.1%** | 58.3% |
+| **0.0400** (High-resource-penalty) | 27.6% | 8.0% | **7.5%** | 56.9% |
 
-**Interpretation:** At $\lambda = 0.0$, the selector chooses high-overhead CDR techniques in **65.1%** of cases to maximize accuracy. As the resource penalty $\lambda$ sweeps up to $0.04$, CDR utilization drops monotonically to **6.7%**, while zero-cost RAW/RAW+ baselines expand from **3.9% to 45.1%**. 
+**Interpretation:** At $\lambda = 0.0$, the selector chooses high-overhead CDR techniques in **62.2%** of cases to maximize accuracy. As the resource penalty $\lambda$ sweeps up to $0.04$, CDR utilization drops monotonically to **7.5%**, while low-overhead ZNE/RAW baselines expand. 
 
-Interestingly, the selection share of REM exhibits non-monotonic behavior: it rises from **20.7%** at $\lambda=0.0$ to a peak of **35.1%** at $\lambda=0.015$, before declining to **25.8%** at $\lambda=0.040$. This is physically driven by REM's intermediate relative cost (5.0): as the resource penalty starts to rise, REM becomes relatively more attractive than high-overhead CDR (cost 11.0) due to its lower cost, until $\lambda$ rises high enough to penalize REM itself, shifting the selection share toward low-cost RAW baselines. This demonstrates that the cost-aware formulation successfully regulates resource allocation according to budget constraints.
+Interestingly, the selection share of REM exhibits non-monotonic behavior: it rises from **29.9%** at $\lambda=0.0$ to a peak of **59.6%** at $\lambda=0.025$, before declining to **56.9%** at $\lambda=0.040$. This is physically driven by REM's intermediate relative cost (3.0): as the resource penalty starts to rise, REM becomes relatively more attractive than high-overhead CDR (cost 11.0) due to its lower cost, until $\lambda$ rises high enough to penalize REM itself, shifting the selection share toward low-cost RAW baselines. This demonstrates that the cost-aware formulation successfully regulates resource allocation according to budget constraints.
 
 ---
 

@@ -1,7 +1,7 @@
 # qemsel — Quantum Error Mitigation Technique Selector
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/ayush0001-git/qem-selector/master/results/boundary/boundary_overlay.png" alt="ZNE Help-Harm Boundary Overlay" width="700"/>
+  <img src="https://raw.githubusercontent.com/ayush0001-git/qem-selector/master/docs/assets/boundary_overlay.png" alt="ZNE Help-Harm Boundary Overlay" width="700"/>
   <br/>
   <em>Figure 1: The machine learning selector's decision boundary overlay against the analytical Scavino help-harm limit. The selector dynamically recovers the boundary on gate-dominated FakeManilaV2 but correctly refuses ZNE on readout-heavy FakeLagosV2 (exhibiting 100% precision).</em>
 </p>
@@ -339,9 +339,9 @@ on real hardware and why it matters scientifically.
 | `configs/` | `tiny.yaml`/`small.yaml`/`research.yaml` (graded sweep configs), `research_smoke.yaml` (research-shape dry run), `full.yaml` (legacy), `experiment.yaml` (demo config), `hw_first_run.yaml` (minimal real-hardware run), `hardware.yaml` (IBM credentials — gitignored) |
 | `tests/` | pytest suite; `conftest.py` provides fast noiseless fixtures |
 | `docs/LEARNING_GUIDE.md` | Quantum-for-ML-students guide mapped to this codebase |
-| `notes/`, `PROJECT_STATE.md`, `INTERFACES.md` | Development log, agent notes, module contracts |
+| `docs/internal/` | Development logs, internal specifications, agent state tracking, and notes |
 | `results/`, `data/`, `models/` | Run outputs (gitignored) |
-| `spikes/` | Throwaway API-exploration scripts for mitiq ZNE/CDR/REM |
+| `docs/internal/spikes/` | Throwaway API-exploration scripts for mitiq ZNE/CDR/REM |
 
 ## Roadmap to a paper
 

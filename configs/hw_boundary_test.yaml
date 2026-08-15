@@ -53,4 +53,4 @@ feature_version: 2
 # SAFETY GATE — your explicit consent to spend real QPU time. run_experiment
 # refuses ibm_* configs until you review the printed cost estimate and flip
 # this to true. Credentials must be in configs\hardware.yaml (gitignored).
-hardware_confirmed: true
+hardware_confirmed: false

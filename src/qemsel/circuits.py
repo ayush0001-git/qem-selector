@@ -28,10 +28,9 @@ from typing import Callable
 import numpy as np
 from qiskit import QuantumCircuit
 
-# Cross-module import through the public interface only (INTERFACES.md
-# convention 6); ideal.py imports nothing from qemsel, so no cycle. Accessed
-# as a module attribute (``_ideal.ideal_expectation``) so tests can
-# monkeypatch it.
+# Cross-module import through the public interface only; ideal.py imports
+# nothing from qemsel, so no cycle. Accessed as a module attribute
+# (``_ideal.ideal_expectation``) so tests can monkeypatch it.
 from qemsel import ideal as _ideal
 
 

@@ -3,7 +3,7 @@
 Features are computed on the circuit AS GENERATED (pre-transpilation), plus
 two backend-noise summary numbers pulled from
 ``qemsel.backends.get_backend_info`` (the only cross-module call allowed
-here, per INTERFACES.md convention 6).
+here).
 
 Clifford accounting
 -------------------
@@ -22,7 +22,7 @@ from qiskit import QuantumCircuit
 
 #: EXACT feature names, in canonical order. This order is the ML feature
 #: vector order everywhere (model.py, recommend.py). Never reorder/rename
-#: without updating INTERFACES.md and both consumers.
+#: without updating both consumers.
 FEATURE_NAMES: list[str] = [
     "n_qubits",
     "depth",
@@ -36,8 +36,7 @@ FEATURE_NAMES: list[str] = [
     "backend_avg_readout_error",
 ]
 
-#: V2 feature set (INTERFACES.md section V2; builder-features / B5
-#: implements): the FROZEN V1 list plus five ADDITIVE features, in this
+#: V2 feature set: the FROZEN V1 list plus five ADDITIVE features, in this
 #: exact order. Selected via ``extract_features(..., version=2)``; the V1
 #: list and the version=1 path stay byte-identical.
 #:

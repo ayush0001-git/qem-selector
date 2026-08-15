@@ -6,8 +6,9 @@ from qemsel.api import MitigatedExecutor
 def main():
     print("--- Testing High-Level MitigatedExecutor API ---")
     
-    # 1. Initialize the executor
-    model_path = "results/boundary/model_significant.joblib"
+    import os
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    model_path = os.path.join(script_dir, "..", "results", "boundary", "model_significant.joblib")
     print(f"Loading model from: {model_path}")
     executor = MitigatedExecutor(model_path)
     

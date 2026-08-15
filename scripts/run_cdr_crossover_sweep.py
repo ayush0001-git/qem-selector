@@ -47,23 +47,36 @@ def main():
     
     print(f"Running CDR crossover sweep on {len(n_values)}x{len(f_values)} grid...")
     
-    for i, f in enumerate(f_values):
-        for j, n in enumerate(n_values):
-            print(f"--- Running N={n}, fraction={f} ---")
-            mitigation.CDR_SKLEARN_NUM_TRAINING_CIRCUITS = n
-            mitigation.CDR_FRACTION_NON_CLIFFORD = f
-            # Update derived constants just in case (e.g. SHOT_MULTIPLIER_V2)
-            mitigation.SHOT_MULTIPLIER_V2["cdr_ridge"] = 1 + n
-            mitigation.SHOT_MULTIPLIER_V2["cdr_rf"] = 1 + n
-            
-            run_out = out_dir / f"N_{n}_f_{f}"
-            df = run_experiment(config, run_out)
-            
-            # Compute difference: linear (cdr_ridge) - nonlinear (cdr_rf)
-            # Positive means nonlinear has smaller error (nonlinear wins)
-            # Negative means linear has smaller error (linear wins)
-            diff = df["cdr_ridge_abs_error"].mean() - df["cdr_rf_abs_error"].mean()
-            results_grid[i, j] = diff
+    orig_n = mitigation.CDR_SKLEARN_NUM_TRAINING_CIRCUITS
+    orig_f = mitigation.CDR_FRACTION_NON_CLIFFORD
+    orig_mult_ridge = mitigation.SHOT_MULTIPLIER_V2.get("cdr_ridge")
+    orig_mult_rf = mitigation.SHOT_MULTIPLIER_V2.get("cdr_rf")
+    
+    try:
+        for i, f in enumerate(f_values):
+            for j, n in enumerate(n_values):
+                print(f"--- Running N={n}, fraction={f} ---")
+                mitigation.CDR_SKLEARN_NUM_TRAINING_CIRCUITS = n
+                mitigation.CDR_FRACTION_NON_CLIFFORD = f
+                # Update derived constants just in case (e.g. SHOT_MULTIPLIER_V2)
+                mitigation.SHOT_MULTIPLIER_V2["cdr_ridge"] = 1 + n
+                mitigation.SHOT_MULTIPLIER_V2["cdr_rf"] = 1 + n
+                
+                run_out = out_dir / f"N_{n}_f_{f}"
+                df = run_experiment(config, run_out)
+                
+                # Compute difference: linear (cdr_ridge) - nonlinear (cdr_rf)
+                # Positive means nonlinear has smaller error (nonlinear wins)
+                # Negative means linear has smaller error (linear wins)
+                diff = df["cdr_ridge_abs_error"].mean() - df["cdr_rf_abs_error"].mean()
+                results_grid[i, j] = diff
+    finally:
+        mitigation.CDR_SKLEARN_NUM_TRAINING_CIRCUITS = orig_n
+        mitigation.CDR_FRACTION_NON_CLIFFORD = orig_f
+        if orig_mult_ridge is not None:
+            mitigation.SHOT_MULTIPLIER_V2["cdr_ridge"] = orig_mult_ridge
+        if orig_mult_rf is not None:
+            mitigation.SHOT_MULTIPLIER_V2["cdr_rf"] = orig_mult_rf
             
     # Plot heatmap
     plt.figure(figsize=(8, 6))

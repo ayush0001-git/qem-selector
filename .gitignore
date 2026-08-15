@@ -20,3 +20,6 @@ configs/hardware.yaml
 # Internal agent files
 docs/internal/
 scratch/
+
+# Build artifacts / generated PDFs
+*.pdf

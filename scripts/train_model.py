@@ -194,7 +194,6 @@ def main(argv: list[str] | None = None) -> int:
         cost_metrics = results["best_technique_cost_aware"]
         if cost_metrics is not None:
             _print_summary(cost_metrics, out, "model_cost_aware.joblib")
-            json.dumps(cost_metrics)
     elif args.label == "significant":
         # V2: derive the significance-aware label column (never written to
         # the CSV), then train it to its own bundle/metrics filenames.
