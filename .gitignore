@@ -16,3 +16,7 @@ __pycache__/
 
 # Secrets: IBM Quantum API token lives here — never commit it
 configs/hardware.yaml
+
+# Internal agent files
+docs/internal/
+scratch/

@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Benchmark quantum error mitigation (QEM) techniques and train an ML model to recommend the best technique per circuit."
 requires-python = ">=3.12"
 # NOTE: runtime dependencies are intentionally NOT listed here.
-# The environment is pinned by requirements.txt (see PROJECT_STATE.md);
+# The environment is pinned by requirements.txt (see docs/internal/PROJECT_STATE.md);
 # listing deps here would make `pip install -e .` re-resolve and risk breaking pins.
 
 [tool.setuptools.packages.find]

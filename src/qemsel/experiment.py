@@ -766,7 +766,103 @@ def _write_aggregated(
     return agg_df
 
 
-def run_experiment(config: dict, out_dir: Path) -> pd.DataFrame:
+def _run_single_unit(
+    spec: Any,
+    circuit: Any,
+    backend_name: str,
+    pauli: str,
+    base_shots: int,
+    ideal_value: float,
+    feature_version: int,
+    feature_names: list[str],
+    techniques: list[str],
+    list_mode: bool,
+    errors_path: Path,
+) -> dict[str, Any]:
+    """Helper to run a single work unit (useful for parallel execution)."""
+    row: dict[str, Any] = {
+        "circuit_id": spec.circuit_id,
+        "family": spec.family,
+        "n_qubits": spec.n_qubits,
+        "depth": spec.depth,
+        "seed": spec.seed,
+        "backend": backend_name,
+        "pauli": pauli,
+    }
+    if list_mode:
+        row[BASE_SHOTS_COLUMN] = int(base_shots)
+    row["ideal"] = ideal_value
+
+    if feature_version == 1:
+        feats = _features.extract_features(circuit, backend_name)
+    else:
+        feats = _features.extract_features(
+            circuit,
+            backend_name,
+            version=feature_version,
+            base_shots=base_shots,
+        )
+    for name in feature_names:
+        row[f"feat_{name}"] = float(feats[name])
+
+    executor = _backends.make_executor(
+        backend_name, base_shots, seed=spec.seed
+    )
+
+    budget_abort_exc = None
+    try:
+        for tech in techniques:
+            try:
+                value = float(
+                    _mitigation.apply_technique(
+                        tech,
+                        circuit,
+                        pauli,
+                        executor,
+                        backend_name,
+                        base_shots,
+                        spec.seed,
+                    )
+                )
+                row[f"{tech}_value"] = value
+                row[f"{tech}_abs_error"] = abs(value - row["ideal"])
+                row[f"{tech}_shots"] = int(
+                    _mitigation.shots_consumed(tech, base_shots)
+                )
+            except Exception as exc:  # noqa: BLE001 - isolation is the contract
+                prefix = _errors_log_prefix(
+                    spec.circuit_id,
+                    backend_name,
+                    base_shots,
+                    tech,
+                    list_mode,
+                )
+                if _is_budget_exceeded(exc):
+                    budget_abort_exc = exc
+                    with errors_path.open("a", encoding="utf-8") as fh:
+                        fh.write(
+                            f"{prefix}: SWEEP ABORTED - hardware "
+                            f"budget exceeded: {exc!r}\n"
+                        )
+                    break
+                row[f"{tech}_value"] = _NAN
+                row[f"{tech}_abs_error"] = _NAN
+                row[f"{tech}_shots"] = _NAN
+                with errors_path.open("a", encoding="utf-8") as fh:
+                    fh.write(f"{prefix}: {exc!r}\n")
+    finally:
+        _close_executor(executor, f"{spec.circuit_id} @ {backend_name}")
+
+    if budget_abort_exc is not None:
+        raise budget_abort_exc
+
+    best_tech, best_cost_tech = _pick_winners(row, techniques, base_shots)
+    row["best_technique"] = best_tech
+    row[COST_AWARE_COLUMN] = best_cost_tech
+    return row
+
+
+def run_experiment(config: dict, out_dir: Path, num_workers: int = 1) -> pd.DataFrame:
     """Run the full benchmark sweep and build the labeled dataset.
 
     Config schema::
@@ -867,6 +963,7 @@ def run_experiment(config: dict, out_dir: Path) -> pd.DataFrame:
     Args:
         config: dict as above.
         out_dir: output directory (pathlib.Path).
+        num_workers: number of parallel threads to use for simulated backends.
 
     Returns:
         The COMPLETE DataFrame (previously existing + newly computed rows),
@@ -950,191 +1047,135 @@ def run_experiment(config: dict, out_dir: Path) -> pd.DataFrame:
     budget_txt = (
         f" x {len(budgets)} shot-budgets" if list_mode else ""
     )
-    print(
-        f"run_experiment: {n_units} units ({len(suite)} circuits x "
-        f"{len(backend_names)} backends{budget_txt}), {len(done_pairs)} "
-        f"already in {csv_path.name}, out_dir={out_dir}",
-        flush=True,
-    )
 
     t_start = time.monotonic()
     new_rows: list[dict[str, Any]] = []
     budget_abort_exc: BaseException | None = None
-    unit_idx = 0
+
+    # Pre-scan and generate tasks, filtering out skipped low-signal pairs
+    tasks = []
+    total_skipped = 0
     for circuit, spec in suite:
         for backend_name in backend_names:
             pauli = _resolve_pauli(pauli_cfg, spec.family, circuit.num_qubits)
-
-            # Low-signal screen is SHOTS-INDEPENDENT (ideal is an exact
-            # statevector property) — evaluate ONCE per (circuit, backend) and
-            # skip ALL budgets of the pair with a single V1-format log line.
             ideal_value = float(_ideal.ideal_expectation(circuit, pauli))
+            
             if min_abs_ideal > 0.0 and abs(ideal_value) < min_abs_ideal:
-                # Near-zero ideal: every technique's error would be pure
-                # shot noise and the winner label a lottery. Skip honestly.
                 with skipped_path.open("a", encoding="utf-8") as fh:
                     fh.write(
                         f"{spec.circuit_id},{backend_name},{pauli},"
                         f"ideal={ideal_value:+.6f},"
                         f"min_abs_ideal={min_abs_ideal}\n"
                     )
-                unit_idx += len(budgets)
-                print(
-                    f"[{unit_idx}/{n_units}] {spec.circuit_id} @ {backend_name}: "
-                    f"SKIPPED low-signal (|ideal|={abs(ideal_value):.3f} < "
-                    f"{min_abs_ideal})",
-                    flush=True,
-                )
+                total_skipped += len(budgets)
                 continue
 
             for base_shots in budgets:
-                unit_idx += 1
-                key: tuple = (
-                    (spec.circuit_id, backend_name, base_shots)
-                    if list_mode
-                    else (spec.circuit_id, backend_name)
-                )
-                unit_label = (
-                    f"{spec.circuit_id} @ {backend_name} @ {base_shots} shots"
-                    if list_mode
-                    else f"{spec.circuit_id} @ {backend_name}"
-                )
+                key = (spec.circuit_id, backend_name, base_shots) if list_mode else (spec.circuit_id, backend_name)
                 if key in done_pairs:
                     continue
+                tasks.append((spec, circuit, backend_name, pauli, base_shots, ideal_value, key))
 
-                t_unit = time.monotonic()
-                row: dict[str, Any] = {
-                    "circuit_id": spec.circuit_id,
-                    "family": spec.family,
-                    "n_qubits": spec.n_qubits,
-                    "depth": spec.depth,
-                    "seed": spec.seed,
-                    "backend": backend_name,
-                    "pauli": pauli,
-                }
-                # base_shots column sits between 'pauli' and 'ideal' in list
-                # mode; absent (V1 schema) in scalar mode. Column ORDER is
-                # forced by ``columns`` at append time, so dict insertion
-                # order here is cosmetic.
-                if list_mode:
-                    row[BASE_SHOTS_COLUMN] = int(base_shots)
-                row["ideal"] = ideal_value
+    n_pending = len(tasks)
+    print(
+        f"run_experiment: {n_units} units ({len(suite)} circuits x "
+        f"{len(backend_names)} backends{budget_txt}), {len(done_pairs)} "
+        f"already in {csv_path.name}, {total_skipped} skipped low-signal, "
+        f"{n_pending} pending execution. out_dir={out_dir}, num_workers={num_workers}",
+        flush=True,
+    )
 
-                # feature_version 1 keeps the EXACT V1 two-arg call
-                # (base_shots ignored; V1-signature monkeypatched fakes keep
-                # working); version 2 threads the unit budget through for
-                # log2_shots.
-                if feature_version == 1:
-                    feats = _features.extract_features(circuit, backend_name)
-                else:
-                    feats = _features.extract_features(
+    if n_pending > 0:
+        if num_workers > 1 and not any(b.startswith("ibm_") for b in backend_names):
+            import concurrent.futures
+            # Run in parallel using ThreadPoolExecutor (thread-safe, does not require pickling)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+                futures_map = {
+                    executor.submit(
+                        _run_single_unit,
+                        spec,
                         circuit,
                         backend_name,
-                        version=feature_version,
-                        base_shots=base_shots,
-                    )
-                for name in feature_names:
-                    row[f"feat_{name}"] = float(feats[name])
-
-                # One noisy executor per unit at the UNIT's budget, seeded by
-                # the circuit's seed so the unit is exactly reproducible in
-                # isolation. raw_plus/zne_fr rebuild their own executors from
-                # the same budget (it flows through apply_technique's shots).
-                executor = _backends.make_executor(
-                    backend_name, base_shots, seed=spec.seed
-                )
-
+                        pauli,
+                        base_shots,
+                        ideal_value,
+                        feature_version,
+                        feature_names,
+                        techniques,
+                        list_mode,
+                        errors_path,
+                    ): (key, time.monotonic())
+                    for spec, circuit, backend_name, pauli, base_shots, ideal_value, key in tasks
+                }
+                
+                completed_count = 0
+                for future in concurrent.futures.as_completed(futures_map):
+                    completed_count += 1
+                    key, t_unit = futures_map[future]
+                    unit_label = f"{key[0]} @ {key[1]}" + (f" @ {key[2]} shots" if list_mode else "")
+                    try:
+                        row = future.result()
+                        _append_row(csv_path, row, columns)
+                        new_rows.append(row)
+                        done_pairs.add(key)
+                        
+                        elapsed = time.monotonic() - t_start
+                        print(
+                            f"[{completed_count}/{n_pending}] {unit_label}: "
+                            f"best={row['best_technique'] or '<all failed>'} "
+                            f"cost-aware={row[COST_AWARE_COLUMN] or '<all failed>'} "
+                            f"(unit {time.monotonic() - t_unit:.1f}s, "
+                            f"elapsed {elapsed:.1f}s)",
+                            flush=True,
+                        )
+                    except Exception as exc:
+                        if _is_budget_exceeded(exc):
+                            print(f"ABORTING SWEEP — hardware QPU budget exceeded: {exc!r}", flush=True)
+                            budget_abort_exc = exc
+                            break
+                        else:
+                            print(f"Warning: unit {unit_label} failed with: {exc!r}", flush=True)
+        else:
+            # Run sequentially
+            completed_count = 0
+            for spec, circuit, backend_name, pauli, base_shots, ideal_value, key in tasks:
+                completed_count += 1
+                t_unit = time.monotonic()
+                unit_label = f"{key[0]} @ {key[1]}" + (f" @ {key[2]} shots" if list_mode else "")
                 try:
-                    for tech in techniques:
-                        try:
-                            value = float(
-                                _mitigation.apply_technique(
-                                    tech,
-                                    circuit,
-                                    pauli,
-                                    executor,
-                                    backend_name,
-                                    base_shots,
-                                    spec.seed,
-                                )
-                            )
-                            row[f"{tech}_value"] = value
-                            row[f"{tech}_abs_error"] = abs(value - row["ideal"])
-                            row[f"{tech}_shots"] = int(
-                                _mitigation.shots_consumed(tech, base_shots)
-                            )
-                        except Exception as exc:  # noqa: BLE001 - isolation is the contract
-                            prefix = _errors_log_prefix(
-                                spec.circuit_id,
-                                backend_name,
-                                base_shots,
-                                tech,
-                                list_mode,
-                            )
-                            if _is_budget_exceeded(exc):
-                                # Real-QPU budget exhausted (only reachable on
-                                # ibm_* backends): every further submission
-                                # would be refused too, so continuing would
-                                # only spam refusals. Abort the WHOLE sweep
-                                # cleanly: log, drop this incomplete unit
-                                # (resume recomputes it when budget returns),
-                                # keep all completed rows.
-                                budget_abort_exc = exc
-                                with errors_path.open("a", encoding="utf-8") as fh:
-                                    fh.write(
-                                        f"{prefix}: SWEEP ABORTED - hardware "
-                                        f"budget exceeded: {exc!r}\n"
-                                    )
-                                break
-                            # Any other technique failure (mitiq errors,
-                            # executor errors, ...) becomes NaN + a log line;
-                            # the run must continue.
-                            row[f"{tech}_value"] = _NAN
-                            row[f"{tech}_abs_error"] = _NAN
-                            row[f"{tech}_shots"] = _NAN
-                            with errors_path.open("a", encoding="utf-8") as fh:
-                                fh.write(f"{prefix}: {exc!r}\n")
-                finally:
-                    # Real-hardware executors expose close() (shared Batch);
-                    # simulated ones do not. Always release per-unit resources.
-                    _close_executor(executor, unit_label)
-
-                if budget_abort_exc is not None:
+                    row = _run_single_unit(
+                        spec,
+                        circuit,
+                        backend_name,
+                        pauli,
+                        base_shots,
+                        ideal_value,
+                        feature_version,
+                        feature_names,
+                        techniques,
+                        list_mode,
+                        errors_path,
+                    )
+                    _append_row(csv_path, row, columns)
+                    new_rows.append(row)
+                    done_pairs.add(key)
+                    
+                    elapsed = time.monotonic() - t_start
                     print(
-                        f"[{unit_idx}/{n_units}] {unit_label}: "
-                        "ABORTING SWEEP — hardware QPU budget exceeded "
-                        f"({budget_abort_exc!r}). Completed units are saved; "
-                        "this unit was dropped and will be recomputed on "
-                        "resume.",
+                        f"[{completed_count}/{n_pending}] {unit_label}: "
+                        f"best={row['best_technique'] or '<all failed>'} "
+                        f"cost-aware={row[COST_AWARE_COLUMN] or '<all failed>'} "
+                        f"(unit {time.monotonic() - t_unit:.1f}s, "
+                        f"elapsed {elapsed:.1f}s)",
                         flush=True,
                     )
-                    break
-
-                best_tech, best_cost_tech = _pick_winners(
-                    row, techniques, base_shots
-                )
-                row["best_technique"] = best_tech
-                row[COST_AWARE_COLUMN] = best_cost_tech
-
-                _append_row(csv_path, row, columns)
-                new_rows.append(row)
-                done_pairs.add(key)
-
-                elapsed = time.monotonic() - t_start
-                print(
-                    f"[{unit_idx}/{n_units}] {unit_label}: "
-                    f"best={best_tech or '<all failed>'} "
-                    f"cost-aware={best_cost_tech or '<all failed>'} "
-                    f"(unit {time.monotonic() - t_unit:.1f}s, "
-                    f"elapsed {elapsed:.1f}s)",
-                    flush=True,
-                )
-            # budget_abort_exc set inside the budget loop already broke it;
-            # propagate the abort up through the backend and circuit loops.
-            if budget_abort_exc is not None:
-                break
-        if budget_abort_exc is not None:
-            break
+                except Exception as exc:
+                    if _is_budget_exceeded(exc):
+                        print(f"ABORTING SWEEP — hardware QPU budget exceeded: {exc!r}", flush=True)
+                        budget_abort_exc = exc
+                        break
+                    else:
+                        print(f"Warning: unit {unit_label} failed with: {exc!r}", flush=True)
 
     total_elapsed = time.monotonic() - t_start
     status = "ABORTED (hardware budget)" if budget_abort_exc is not None else "finished"

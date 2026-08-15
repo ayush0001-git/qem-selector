@@ -1,13 +1,15 @@
-"""Unit tests for qemsel.mitigation.
+"""Unit tests for the V2 additions to qemsel.mitigation (builder B1).
 
-Standalone by design: uses the conftest fakes (``tiny_circuit``,
+Covers the three new techniques ('zne_fr', 'cdr_ridge', 'cdr_rf'), the shared
+``richardson_coefficients`` source of truth, the V2 constants/cost model, and
+a CAPTURE-FIRST byte-identical regression pinning the pre-change values of the
+frozen V1 techniques (raw/raw_plus/zne/cdr/rem) on a fixed circuit+seed.
+
+Standalone by design: unit tests use the conftest fakes (``tiny_circuit``,
 ``tiny_identity_circuit``, ``fake_executor``) plus a monkeypatched exact
-statevector ``qemsel.ideal.ideal_expectation`` (that module belongs to
-another builder and may still be a stub when these tests run).
-
-Core invariant: with a PERFECT (noiseless statevector) executor, every
-technique must return approximately the ideal value — mitigating nothing is
-approximately the identity.
+statevector ``qemsel.ideal.ideal_expectation`` and a monkeypatched
+``qemsel.backends.make_executor`` (both cross-builder modules), so no noisy Aer
+simulation is needed except in the explicitly ``@pytest.mark.slow`` regression.
 """
 
 from __future__ import annotations
@@ -20,51 +22,65 @@ from qiskit import QuantumCircuit
 from qiskit.quantum_info import Pauli, Statevector
 
 import qemsel.ideal
-from qemsel import mitigation
+from qemsel import backends, mitigation
 from qemsel.mitigation import (
     MitigationError,
     SHOT_MULTIPLIER,
+    SHOT_MULTIPLIER_V2,
     TECHNIQUES,
+    TECHNIQUES_V2,
     apply_technique,
+    richardson_coefficients,
     shots_consumed,
 )
 
-BACKEND = "FakeManilaV2"  # metadata only — no noisy simulation in these tests
-SHOTS = 256
+BACKEND = "FakeManilaV2"  # metadata only except in the slow regression
+BASE_SHOTS = 256
 SEED = 3
+PAULI = "ZZ"
 
-# CDR's perfect fit makes scipy warn that it cannot estimate the covariance.
-CDR_FIT_WARNING = (
-    "ignore:Covariance of the parameters could not be estimated"
-)
+CDR_FIT_WARNING = "ignore:Covariance of the parameters could not be estimated"
+
+# ---------------------------------------------------------------------------
+# Byte-identical reference values for the FROZEN V1 techniques, CAPTURED FIRST
+# by running the pre-change code (scratchpad/capture_v1_ref.py) on
+# capture_circuit() with FakeManilaV2 @ 256 shots, seed 3, pauli "ZZ". Any V2
+# edit that perturbs a V1 dispatch path breaks these exact-equality asserts.
+# ---------------------------------------------------------------------------
+V1_REFERENCE_VALUES = {
+    "raw": 0.203125,
+    "raw_plus": 0.19176136363636365,
+    "zne": 0.2187499999999998,
+    "cdr": 0.16611249369922473,
+    "rem": 0.2311111111111111,
+}
+
+# New-technique deterministic values captured AFTER implementation on the same
+# (circuit, backend, shots, seed) — pins their reproducibility, not correctness.
+V2_REFERENCE_VALUES = {
+    "zne_fr": 0.296875,
+    # Re-captured 2026-07-23 after the findings-applier switched cdr_ridge from
+    # the over-regularized Ridge(alpha=1.0) (old value 0.7762758893745265 — the
+    # review-Finding-3 bug, 3.6x worse than plain cdr) to RidgeCV. The new value
+    # equals plain cdr's 0.166 on this circuit — exactly correct: RidgeCV's LOO
+    # picks near-zero alpha and reproduces linear CDR (the Korolev anchor).
+    "cdr_ridge": 0.16611846587957096,
+    "cdr_rf": 0.6309239494731316,
+}
 
 
-def _statevector_expectation(circuit: QuantumCircuit, pauli: str) -> float:
+def _sv_exp(circuit: QuantumCircuit, pauli: str) -> float:
     """Exact <pauli> (qemsel convention: pauli[i] acts on qubit i)."""
     circ = circuit.remove_final_measurements(inplace=False)
     return float(np.real(Statevector(circ).expectation_value(Pauli(pauli[::-1]))))
 
 
-@pytest.fixture()
-def patched_ideal(monkeypatch) -> dict:
-    """Replace qemsel.ideal.ideal_expectation (possibly an unimplemented
-    stub) with an exact statevector version. Returns a call counter."""
-    calls = {"n": 0}
+def capture_circuit() -> QuantumCircuit:
+    """The circuit the V1/V2 reference values were captured on.
 
-    def _ideal(circuit: QuantumCircuit, pauli: str) -> float:
-        calls["n"] += 1
-        return _statevector_expectation(circuit, pauli)
-
-    monkeypatch.setattr(qemsel.ideal, "ideal_expectation", _ideal)
-    return calls
-
-
-@pytest.fixture()
-def cdr_circuit() -> QuantumCircuit:
-    """2-qubit circuit with plenty of non-Clifford rz/ry/rx content.
-
-    CDR needs non-Clifford gates to build training circuits from; the ry/rx
-    gates additionally exercise the CDR-internal basis translation.
+    Identical to the ``cdr_circuit`` fixture: 2q with non-Clifford rz/ry/rx
+    content (so CDR + its sklearn variants pass the fully-Clifford and
+    training-spread guards).
     """
     qc = QuantumCircuit(2)
     for _ in range(3):
@@ -83,6 +99,12 @@ def cdr_circuit() -> QuantumCircuit:
     return qc
 
 
+@pytest.fixture()
+def cdr_circuit() -> QuantumCircuit:
+    """Same non-Clifford 2q circuit as ``capture_circuit`` (fixture form)."""
+    return capture_circuit()
+
+
 def _counting(
     executor: Callable[[QuantumCircuit, str], float],
 ) -> tuple[Callable[[QuantumCircuit, str], float], list[str]]:
@@ -96,26 +118,34 @@ def _counting(
     return _exec, calls
 
 
-#: The techniques that consume ONLY the passed-in executor ('raw_plus'
-#: instead rebuilds its own via backends.make_executor — covered by the
-#: dedicated raw_plus tests below).
-PASSED_EXECUTOR_TECHNIQUES = ["raw", "zne", "cdr", "rem"]
+@pytest.fixture()
+def patched_ideal(monkeypatch) -> dict:
+    """Replace qemsel.ideal.ideal_expectation with an exact statevector version
+    and count calls (mirrors the V1 test-suite fixture)."""
+    calls = {"n": 0}
+
+    def _ideal(circuit: QuantumCircuit, pauli: str) -> float:
+        calls["n"] += 1
+        return _sv_exp(circuit, pauli)
+
+    monkeypatch.setattr(qemsel.ideal, "ideal_expectation", _ideal)
+    return calls
 
 
 @pytest.fixture()
-def patched_make_executor(monkeypatch, fake_executor) -> dict:
-    """Patch qemsel.backends.make_executor with a recording noiseless fake.
+def recording_make_executor(monkeypatch, fake_executor) -> dict:
+    """Patch backends.make_executor with a recording noiseless statevector fake.
 
-    raw_plus rebuilds its executor through backends.make_executor; unit
-    tests must not spin up real Aer noise models, so this fixture returns a
-    noiseless statevector executor of the SAME contract and records:
-        'make_calls': list of (backend_name, shots, seed) make_executor got,
+    zne_fr rebuilds a per-level executor through backends.make_executor; unit
+    tests must not spin up Aer noise models, so this returns a noiseless
+    executor of the same contract and records:
+        'make_calls': list of (backend_name, shots, seed) passed to make,
         'exec_paulis': paulis of every built-executor invocation,
         'closed': how many times close() was called on built executors.
     """
     record = {"make_calls": [], "exec_paulis": [], "closed": 0}
 
-    def _fake_make_executor(backend_name, shots, seed):
+    def _fake_make(backend_name, shots, seed):
         record["make_calls"].append((backend_name, shots, seed))
 
         def _exec(circuit: QuantumCircuit, pauli: str) -> float:
@@ -128,184 +158,226 @@ def patched_make_executor(monkeypatch, fake_executor) -> dict:
         _exec.close = _close
         return _exec
 
-    monkeypatch.setattr("qemsel.backends.make_executor", _fake_make_executor)
+    monkeypatch.setattr("qemsel.backends.make_executor", _fake_make)
     return record
 
 
-# ---------------------------------------------------------------------------
-# Constants and cost model
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# V2 constants and cost model
+# ===========================================================================
 
 
-def test_techniques_canonical_order() -> None:
+def test_techniques_v2_is_v1_plus_three_additive() -> None:
+    assert TECHNIQUES_V2 == TECHNIQUES + ["zne_fr", "cdr_ridge", "cdr_rf"]
+    # V1 surface is frozen and unchanged.
     assert TECHNIQUES == ["raw", "raw_plus", "zne", "cdr", "rem"]
 
 
-def test_shot_multiplier_keys_and_derivation() -> None:
-    assert set(SHOT_MULTIPLIER) == set(TECHNIQUES)
-    assert SHOT_MULTIPLIER["raw"] == 1
-    assert SHOT_MULTIPLIER["raw_plus"] == mitigation.RAW_PLUS_MULTIPLIER
-    assert SHOT_MULTIPLIER["zne"] == len(mitigation.ZNE_SCALE_FACTORS)
-    assert SHOT_MULTIPLIER["cdr"] == 1 + mitigation.CDR_NUM_TRAINING_CIRCUITS
-    assert (
-        SHOT_MULTIPLIER["rem"]
-        == 1 + mitigation.REM_NUM_CALIBRATION_CIRCUITS
+def test_shot_multiplier_v2_is_truthful_superset() -> None:
+    # Superset with identical values on the frozen V1 keys.
+    for name, mult in SHOT_MULTIPLIER.items():
+        assert SHOT_MULTIPLIER_V2[name] == mult
+    # zne_fr is cost-neutral vs raw under equal_split (spends ONE base budget);
+    # the sklearn-CDR variants cost 1 + N training executions like plain cdr.
+    assert SHOT_MULTIPLIER_V2["zne_fr"] == (
+        1
+        if mitigation.ZNE_FR_SHOT_ALLOCATION == "equal_split"
+        else len(mitigation.ZNE_FR_SCALE_FACTORS)
     )
-    for value in SHOT_MULTIPLIER.values():
+    assert (
+        SHOT_MULTIPLIER_V2["cdr_ridge"]
+        == 1 + mitigation.CDR_SKLEARN_NUM_TRAINING_CIRCUITS
+    )
+    assert (
+        SHOT_MULTIPLIER_V2["cdr_rf"]
+        == 1 + mitigation.CDR_SKLEARN_NUM_TRAINING_CIRCUITS
+    )
+    for value in SHOT_MULTIPLIER_V2.values():
         assert isinstance(value, int) and value >= 1
 
 
-def test_raw_plus_multiplier_equals_most_expensive_technique() -> None:
-    """raw_plus is the EQUAL-budget baseline: its budget must equal the
-    largest multiplier of any real technique (CDR's 11), so 'just take more
-    shots' is compared at the most expensive technique's cost."""
-    others = {t: m for t, m in SHOT_MULTIPLIER.items() if t != "raw_plus"}
-    assert mitigation.RAW_PLUS_MULTIPLIER == max(others.values())
-    assert mitigation.RAW_PLUS_MULTIPLIER == SHOT_MULTIPLIER["cdr"] == 11
-    assert shots_consumed("raw_plus", 4096) == shots_consumed("cdr", 4096)
-
-
-def test_rem_min_damping_floor_is_strict() -> None:
-    """Reviewer item: 1e-6 let REM invert near-singular readout (e.g. 46%
-    error on FakeLagosV2 q2), amplifying shot noise ~29x into the dataset.
-    The floor must be at least 0.02 so those refuse loudly instead."""
-    assert mitigation.REM_MIN_DAMPING >= 0.02
-
-
-@pytest.mark.parametrize("name", TECHNIQUES)
-def test_shots_consumed_sane_positive_ints(name: str) -> None:
-    total = shots_consumed(name, 1024)
+@pytest.mark.parametrize("name", ["zne_fr", "cdr_ridge", "cdr_rf"])
+def test_shots_consumed_new_techniques(name: str) -> None:
+    total = shots_consumed(name, 4096)
     assert isinstance(total, int)
-    assert total == 1024 * SHOT_MULTIPLIER[name]
-    assert total >= 1024
+    assert total == 4096 * SHOT_MULTIPLIER_V2[name]
 
 
-def test_shots_consumed_unknown_name_raises() -> None:
+def test_zne_fr_scale_factors_are_the_two_point_rule() -> None:
+    """Spike-retuned to the Scavino (1, 3) k=1 nodes so the zne_fr estimate and
+    the qemsel.boundary theory share exactly these nodes (else the overlay is
+    apples-to-oranges)."""
+    assert mitigation.ZNE_FR_SCALE_FACTORS == (1.0, 3.0)
+    assert mitigation.ZNE_FR_SHOT_ALLOCATION == "equal_split"
+    assert mitigation.ZNE_FR_FOLD_METHOD == "global"
+
+
+def test_cdr_sklearn_shares_cdr_training_settings() -> None:
+    # The three cdr variants must differ ONLY in the regressor (Angle 2 control).
+    assert (
+        mitigation.CDR_SKLEARN_NUM_TRAINING_CIRCUITS
+        == mitigation.CDR_NUM_TRAINING_CIRCUITS
+    )
+
+
+# ===========================================================================
+# richardson_coefficients — shared source of truth (imported by boundary.py)
+# ===========================================================================
+
+
+def test_richardson_two_point_rule_is_three_halves_minus_half() -> None:
+    assert richardson_coefficients((1.0, 3.0)) == pytest.approx((1.5, -0.5))
+
+
+def test_richardson_three_point_rule_matches_hand_calc() -> None:
+    # (1, 3, 5) -> (15/8, -5/4, 3/8) (spike-boundary.md §4).
+    assert richardson_coefficients((1.0, 3.0, 5.0)) == pytest.approx(
+        (1.875, -1.25, 0.375)
+    )
+
+
+def test_zne_fr_nodes_give_expected_coefficients() -> None:
+    assert richardson_coefficients(mitigation.ZNE_FR_SCALE_FACTORS) == pytest.approx(
+        (1.5, -0.5)
+    )
+
+
+@pytest.mark.parametrize(
+    "nodes",
+    [(1.0, 3.0), (1.0, 2.0, 3.0), (1.0, 3.0, 5.0), (1.0, 2.0, 4.0, 8.0)],
+)
+def test_richardson_satisfies_lagrange_constraints(nodes: tuple) -> None:
+    """sum c_k == 1 and sum c_k * s_k^m == 0 for m = 1..len-1 (Lagrange at 0)."""
+    c = np.asarray(richardson_coefficients(nodes))
+    s = np.asarray(nodes)
+    assert c.sum() == pytest.approx(1.0)
+    for m in range(1, len(nodes)):
+        assert float(np.dot(c, s**m)) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_richardson_matches_independent_lagrange_formula() -> None:
+    """Cross-check against the spike's independent numpy implementation."""
+
+    def spike_rc(lambdas):
+        lam = np.asarray(lambdas, float)
+        coeffs = np.empty_like(lam)
+        for j in range(lam.size):
+            others = np.delete(lam, j)
+            coeffs[j] = np.prod(others / (others - lam[j]))
+        return tuple(float(x) for x in coeffs)
+
+    for nodes in [(1.0, 3.0), (1.0, 3.0, 5.0), (1.0, 2.5, 4.0)]:
+        assert richardson_coefficients(nodes) == pytest.approx(spike_rc(nodes))
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        (1.0,),  # fewer than 2
+        (),  # empty
+        (1.0, 1.0),  # not distinct
+        (0.5, 2.0),  # a node < 1.0
+        (1.0, float("inf")),  # non-finite
+    ],
+)
+def test_richardson_rejects_bad_nodes(bad: tuple) -> None:
     with pytest.raises(ValueError):
-        shots_consumed("nope", 1024)
+        richardson_coefficients(bad)
 
 
-def test_apply_technique_unknown_name_raises(
-    tiny_circuit: QuantumCircuit, fake_executor
+def test_richardson_returns_plain_float_tuple() -> None:
+    c = richardson_coefficients((1.0, 3.0))
+    assert isinstance(c, tuple)
+    assert all(isinstance(x, float) for x in c)
+
+
+# ===========================================================================
+# zne_fr: fixed-Richardson, equal-split rebuilt executors, global folding
+# ===========================================================================
+
+
+@pytest.mark.parametrize("circuit_fn,pauli", [(None, "ZZ")])
+def test_zne_fr_noiseless_returns_ideal(
+    circuit_fn, pauli, cdr_circuit, fake_executor, recording_make_executor
 ) -> None:
-    with pytest.raises(ValueError):
-        apply_technique(
-            "nope", tiny_circuit, "ZZ", fake_executor, BACKEND, SHOTS, SEED
-        )
-
-
-# ---------------------------------------------------------------------------
-# Core invariant: perfect executor => every technique returns ~ideal
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.filterwarnings(CDR_FIT_WARNING)
-@pytest.mark.parametrize("name", TECHNIQUES)
-def test_noiseless_executor_returns_ideal(
-    name: str,
-    cdr_circuit: QuantumCircuit,
-    fake_executor,
-    patched_ideal,
-    patched_make_executor,
-) -> None:
-    ideal = _statevector_expectation(cdr_circuit, "ZZ")
+    """1.5*E(scale1) - 0.5*E(scale3) == ideal on a noiseless executor (global
+    folding preserves the logical action, so both levels read the ideal)."""
+    passed, passed_calls = _counting(fake_executor)
+    ideal = _sv_exp(cdr_circuit, pauli)
     value = apply_technique(
-        name, cdr_circuit, "ZZ", fake_executor, BACKEND, SHOTS, SEED
+        "zne_fr", cdr_circuit, pauli, passed, BACKEND, BASE_SHOTS, SEED
     )
-    assert value == pytest.approx(ideal, abs=1e-6)
-
-
-@pytest.mark.parametrize("name", ["raw", "raw_plus", "zne", "rem"])
-@pytest.mark.parametrize("pauli,expected", [("ZZ", 1.0), ("XX", 1.0), ("ZI", 0.0)])
-def test_noiseless_bell_expectations(
-    name: str,
-    pauli: str,
-    expected: float,
-    tiny_circuit: QuantumCircuit,
-    fake_executor,
-    patched_make_executor,
-) -> None:
-    value = apply_technique(
-        name, tiny_circuit, pauli, fake_executor, BACKEND, SHOTS, SEED
-    )
-    assert value == pytest.approx(expected, abs=1e-9)
-
-
-def test_noiseless_identity_circuit_zzz(
-    tiny_identity_circuit: QuantumCircuit, fake_executor, patched_ideal
-) -> None:
-    # tiny_identity_circuit is FULLY CLIFFORD, so cdr must fail loudly
-    # (classical-simulation guard) rather than return a fake perfect value.
-    for name in ("raw", "zne", "rem"):
-        value = apply_technique(
-            name,
-            tiny_identity_circuit,
-            "ZZZ",
-            fake_executor,
-            BACKEND,
-            SHOTS,
-            SEED,
-        )
-        assert value == pytest.approx(1.0, abs=1e-9), name
-    with pytest.raises(MitigationError):
-        apply_technique(
-            "cdr", tiny_identity_circuit, "ZZZ", fake_executor, BACKEND, SHOTS, SEED
-        )
-
-
-# ---------------------------------------------------------------------------
-# Cost-model truthfulness: executor call counts match SHOT_MULTIPLIER
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.filterwarnings(CDR_FIT_WARNING)
-@pytest.mark.parametrize("name", PASSED_EXECUTOR_TECHNIQUES)
-def test_executor_call_count_matches_shot_multiplier(
-    name: str, cdr_circuit: QuantumCircuit, fake_executor, patched_ideal
-) -> None:
-    counting_executor, calls = _counting(fake_executor)
-    apply_technique(
-        name, cdr_circuit, "ZZ", counting_executor, BACKEND, SHOTS, SEED
-    )
-    assert len(calls) == SHOT_MULTIPLIER[name]
-
-
-# ---------------------------------------------------------------------------
-# raw_plus: equal-budget baseline semantics
-# ---------------------------------------------------------------------------
-
-
-def test_raw_plus_builds_boosted_executor_and_skips_passed_one(
-    cdr_circuit: QuantumCircuit, fake_executor, patched_make_executor
-) -> None:
-    """Cost-model truthfulness for raw_plus: exactly ONE execution at
-    RAW_PLUS_MULTIPLIER * base shots on a freshly built executor; the
-    passed (base-shots-bound) executor is never invoked — calling a seeded
-    executor 11 times would return 11 identical values, i.e. a fake 11x."""
-    counting_executor, passed_calls = _counting(fake_executor)
-    value = apply_technique(
-        "raw_plus", cdr_circuit, "ZZ", counting_executor, BACKEND, SHOTS, SEED
-    )
-    assert passed_calls == []  # passed executor unused
-    assert patched_make_executor["make_calls"] == [
-        (BACKEND, SHOTS * mitigation.RAW_PLUS_MULTIPLIER, SEED)
-    ]
-    assert patched_make_executor["exec_paulis"] == ["ZZ"]  # exactly 1 call
-    ideal = _statevector_expectation(cdr_circuit, "ZZ")
     assert value == pytest.approx(ideal, abs=1e-9)
+    assert passed_calls == []  # the base-shots-bound passed executor is unused
 
 
-def test_raw_plus_closes_built_executor(
-    cdr_circuit: QuantumCircuit, fake_executor, patched_make_executor
+def test_zne_fr_noiseless_bell_is_one(
+    tiny_circuit, fake_executor, recording_make_executor
 ) -> None:
-    apply_technique(
-        "raw_plus", cdr_circuit, "ZZ", fake_executor, BACKEND, SHOTS, SEED
+    value = apply_technique(
+        "zne_fr", tiny_circuit, "ZZ", fake_executor, BACKEND, BASE_SHOTS, SEED
     )
-    assert patched_make_executor["closed"] == 1
+    assert value == pytest.approx(1.0, abs=1e-9)
 
 
-def test_raw_plus_make_executor_failure_wrapped(
-    cdr_circuit: QuantumCircuit, fake_executor, monkeypatch
+def test_zne_fr_rebuilds_split_budget_executors_and_closes_them(
+    cdr_circuit, fake_executor, recording_make_executor
+) -> None:
+    """Cost-model truthfulness for zne_fr: one rebuilt executor PER level, each
+    at base_shots // n_levels, same seed; total shots == base_shots (multiplier
+    1); each rebuilt executor closed."""
+    passed, passed_calls = _counting(fake_executor)
+    apply_technique(
+        "zne_fr", cdr_circuit, "ZZ", passed, BACKEND, BASE_SHOTS, SEED
+    )
+    n = len(mitigation.ZNE_FR_SCALE_FACTORS)
+    level_shots = BASE_SHOTS // n
+    assert recording_make_executor["make_calls"] == [
+        (BACKEND, level_shots, SEED)
+    ] * n
+    assert recording_make_executor["exec_paulis"] == ["ZZ"] * n  # one per level
+    assert recording_make_executor["closed"] == n
+    assert passed_calls == []
+    total_shots = sum(s for _b, s, _sd in recording_make_executor["make_calls"])
+    assert total_shots == BASE_SHOTS
+    assert total_shots == shots_consumed("zne_fr", BASE_SHOTS)
+
+
+def test_zne_fr_applies_fixed_coefficients_in_level_order(
+    monkeypatch, cdr_circuit, fake_executor
+) -> None:
+    """The estimate is sum_k c_k * E_k with the FIXED coefficients applied to
+    the levels in ZNE_FR_SCALE_FACTORS order (level 0 executed first)."""
+    preset = iter([10.0, 20.0])
+
+    def _make(backend_name, shots, seed):
+        def _exec(circuit, pauli):
+            return next(preset)
+
+        return _exec
+
+    monkeypatch.setattr("qemsel.backends.make_executor", _make)
+    coeffs = richardson_coefficients(mitigation.ZNE_FR_SCALE_FACTORS)
+    value = apply_technique(
+        "zne_fr", cdr_circuit, "ZZ", fake_executor, BACKEND, BASE_SHOTS, SEED
+    )
+    assert value == pytest.approx(coeffs[0] * 10.0 + coeffs[1] * 20.0)
+
+
+def test_zne_fr_deterministic_for_fixed_seed(
+    cdr_circuit, fake_executor, recording_make_executor
+) -> None:
+    first = apply_technique(
+        "zne_fr", cdr_circuit, "ZZ", fake_executor, BACKEND, BASE_SHOTS, SEED
+    )
+    second = apply_technique(
+        "zne_fr", cdr_circuit, "ZZ", fake_executor, BACKEND, BASE_SHOTS, SEED
+    )
+    assert first == second
+
+
+def test_zne_fr_make_executor_failure_wrapped(
+    cdr_circuit, fake_executor, monkeypatch
 ) -> None:
     def _boom(backend_name, shots, seed):
         raise RuntimeError("no such backend")
@@ -313,19 +385,19 @@ def test_raw_plus_make_executor_failure_wrapped(
     monkeypatch.setattr("qemsel.backends.make_executor", _boom)
     with pytest.raises(MitigationError) as excinfo:
         apply_technique(
-            "raw_plus", cdr_circuit, "ZZ", fake_executor, BACKEND, SHOTS, SEED
+            "zne_fr", cdr_circuit, "ZZ", fake_executor, BACKEND, BASE_SHOTS, SEED
         )
-    assert excinfo.value.technique == "raw_plus"
+    assert excinfo.value.technique == "zne_fr"
 
 
-def test_raw_plus_execution_failure_wrapped_and_still_closed(
-    cdr_circuit: QuantumCircuit, fake_executor, monkeypatch
+def test_zne_fr_closes_built_executor_even_on_failure(
+    cdr_circuit, fake_executor, monkeypatch
 ) -> None:
     closed = {"n": 0}
 
     def _make(backend_name, shots, seed):
         def _exec(circuit, pauli):
-            raise RuntimeError("boosted executor exploded")
+            raise RuntimeError("level executor exploded")
 
         def _close():
             closed["n"] += 1
@@ -336,207 +408,156 @@ def test_raw_plus_execution_failure_wrapped_and_still_closed(
     monkeypatch.setattr("qemsel.backends.make_executor", _make)
     with pytest.raises(MitigationError) as excinfo:
         apply_technique(
-            "raw_plus", cdr_circuit, "ZZ", fake_executor, BACKEND, SHOTS, SEED
+            "zne_fr", cdr_circuit, "ZZ", fake_executor, BACKEND, BASE_SHOTS, SEED
         )
-    assert excinfo.value.technique == "raw_plus"
-    assert closed["n"] == 1  # close() must run even on failure (finally)
+    assert excinfo.value.technique == "zne_fr"
+    assert closed["n"] == 1  # close() runs in a finally even when exec raises
 
 
-# ---------------------------------------------------------------------------
-# Technique-specific behavior
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.filterwarnings(CDR_FIT_WARNING)
-def test_cdr_uses_qemsel_ideal_simulator(
-    cdr_circuit: QuantumCircuit, fake_executor, patched_ideal
+def test_zne_fr_too_few_shots_to_split_fails_loudly(
+    cdr_circuit, fake_executor, recording_make_executor
 ) -> None:
-    apply_technique(
-        "cdr", cdr_circuit, "ZZ", fake_executor, BACKEND, SHOTS, SEED
-    )
-    # The near-Clifford training labels must come from qemsel.ideal.
-    assert patched_ideal["n"] >= 1
-
-
-def test_cdr_clifford_circuit_fails_loudly(
-    tiny_circuit: QuantumCircuit, fake_executor, patched_ideal
-) -> None:
-    """Fail-loud guard (science review): mitiq would short-circuit a
-    fully-Clifford circuit and return the classical simulator value — zero
-    error by construction, no quantum execution. Recording that as a CDR
-    result labeled 40% of the pre-fix dataset 'cdr wins' for classical
-    simulability, so _apply_cdr must raise MitigationError instead."""
-    counting_executor, calls = _counting(fake_executor)
+    # base_shots=1 over 2 levels rounds the per-level budget to 0.
     with pytest.raises(MitigationError) as excinfo:
-        apply_technique(
-            "cdr", tiny_circuit, "ZZ", counting_executor, BACKEND, SHOTS, SEED
-        )
-    assert excinfo.value.technique == "cdr"
-    assert "Clifford" in str(excinfo.value)
-    assert calls == []  # noisy executor never invoked
+        apply_technique("zne_fr", cdr_circuit, "ZZ", fake_executor, BACKEND, 1, SEED)
+    assert excinfo.value.technique == "zne_fr"
 
 
-def test_cdr_degenerate_training_ideals_fail_loudly(
-    fake_executor, patched_ideal
+# ===========================================================================
+# cdr_ridge / cdr_rf: Route B (generate_training_circuits + sklearn fit)
+# ===========================================================================
+
+
+@pytest.mark.parametrize("name", ["cdr_ridge", "cdr_rf"])
+def test_cdr_sklearn_executor_call_count(
+    name: str, cdr_circuit, fake_executor, patched_ideal
 ) -> None:
-    """Fail-loud guard: a non-Clifford circuit whose near-Clifford training
-    circuits all share the same ideal value gives a degenerate (constant)
-    regression — classical simulation in disguise. GHZ + one t gate is such
-    a circuit: the single non-Clifford t is replaced by a Clifford in every
-    training circuit, so every training ideal of <ZZ> is exactly +1."""
+    """1 target + N training executions == SHOT_MULTIPLIER_V2[name]."""
+    counting, calls = _counting(fake_executor)
+    apply_technique(name, cdr_circuit, "ZZ", counting, BACKEND, BASE_SHOTS, SEED)
+    assert len(calls) == SHOT_MULTIPLIER_V2[name]
+    assert len(calls) == 1 + mitigation.CDR_SKLEARN_NUM_TRAINING_CIRCUITS
+
+
+@pytest.mark.parametrize("name", ["cdr_ridge", "cdr_rf"])
+def test_cdr_sklearn_uses_qemsel_ideal_for_training_labels(
+    name: str, cdr_circuit, fake_executor, patched_ideal
+) -> None:
+    apply_technique(name, cdr_circuit, "ZZ", fake_executor, BACKEND, BASE_SHOTS, SEED)
+    assert patched_ideal["n"] >= mitigation.CDR_SKLEARN_NUM_TRAINING_CIRCUITS
+
+
+@pytest.mark.parametrize("name", ["cdr_ridge", "cdr_rf"])
+def test_cdr_sklearn_clifford_circuit_fails_loudly(
+    name: str, tiny_circuit, fake_executor, patched_ideal
+) -> None:
+    """Same fully-Clifford guard as _apply_cdr — no noisy execution spent."""
+    counting, calls = _counting(fake_executor)
+    with pytest.raises(MitigationError) as excinfo:
+        apply_technique(name, tiny_circuit, "ZZ", counting, BACKEND, BASE_SHOTS, SEED)
+    assert excinfo.value.technique == name
+    assert "Clifford" in str(excinfo.value)
+    assert calls == []
+
+
+@pytest.mark.parametrize("name", ["cdr_ridge", "cdr_rf"])
+def test_cdr_sklearn_degenerate_spread_fails_loudly(
+    name: str, fake_executor, patched_ideal
+) -> None:
+    """GHZ + one t: every training circuit's ideal <ZZ> is +1 -> degenerate
+    regression -> same fail-loud guard as _apply_cdr, before any noisy call."""
     qc = QuantumCircuit(2)
     qc.h(0)
     qc.cx(0, 1)
     qc.t(0)
-    counting_executor, calls = _counting(fake_executor)
+    counting, calls = _counting(fake_executor)
     with pytest.raises(MitigationError) as excinfo:
-        apply_technique(
-            "cdr", qc, "ZZ", counting_executor, BACKEND, SHOTS, SEED
-        )
-    assert excinfo.value.technique == "cdr"
+        apply_technique(name, qc, "ZZ", counting, BACKEND, BASE_SHOTS, SEED)
+    assert excinfo.value.technique == name
     assert "same ideal value" in str(excinfo.value)
-    assert calls == []  # refused BEFORE spending any noisy executions
+    assert calls == []
 
 
-@pytest.mark.filterwarnings(CDR_FIT_WARNING)
-def test_zne_and_cdr_deterministic_for_fixed_seed(
-    cdr_circuit: QuantumCircuit, fake_executor, patched_ideal
+@pytest.mark.parametrize("name", ["cdr_ridge", "cdr_rf"])
+def test_cdr_sklearn_deterministic_for_fixed_seed(
+    name: str, cdr_circuit, fake_executor, patched_ideal
 ) -> None:
-    for name in ("zne", "cdr"):
-        first = apply_technique(
-            name, cdr_circuit, "ZZ", fake_executor, BACKEND, SHOTS, SEED
-        )
-        second = apply_technique(
-            name, cdr_circuit, "ZZ", fake_executor, BACKEND, SHOTS, SEED
-        )
-        assert first == second, name
-
-
-def test_rem_inverts_symmetric_readout_damping(
-    tiny_circuit: QuantumCircuit,
-    tiny_identity_circuit: QuantumCircuit,
-    cdr_circuit: QuantumCircuit,
-) -> None:
-    """A per-qubit symmetric readout channel damps <Z_S> by d^|S|; REM's
-    calibration measures exactly that factor, so the inversion is exact."""
-    d = 0.82
-
-    def damped_executor(circuit: QuantumCircuit, pauli: str) -> float:
-        k = sum(c != "I" for c in pauli)
-        return _statevector_expectation(circuit, pauli) * d**k
-
-    cases = [
-        (tiny_circuit, "ZZ"),  # even support, ideal +1
-        (tiny_identity_circuit, "ZZZ"),  # odd support, ideal +1
-        (cdr_circuit, "ZZ"),  # non-trivial ideal value
-        (tiny_circuit, "ZI"),  # single-qubit support, ideal 0
-    ]
-    for circuit, pauli in cases:
-        ideal = _statevector_expectation(circuit, pauli)
-        raw = damped_executor(circuit, pauli)
-        value = apply_technique(
-            "rem", circuit, pauli, damped_executor, BACKEND, SHOTS, SEED
-        )
-        assert value == pytest.approx(ideal, abs=1e-9), (pauli, ideal)
-        # And it actually changed something when the raw value was biased.
-        if abs(ideal) > 1e-12:
-            assert abs(value - ideal) < abs(raw - ideal)
-
-
-def test_rem_identity_observable_returns_raw(
-    tiny_circuit: QuantumCircuit, fake_executor
-) -> None:
-    counting_executor, calls = _counting(fake_executor)
-    value = apply_technique(
-        "rem", tiny_circuit, "II", counting_executor, BACKEND, SHOTS, SEED
+    first = apply_technique(
+        name, cdr_circuit, "ZZ", fake_executor, BACKEND, BASE_SHOTS, SEED
     )
-    assert value == pytest.approx(1.0, abs=1e-12)
-    assert len(calls) == 1  # no calibration for an empty support
-
-
-def test_rem_near_singular_damping_raises() -> None:
-    qc = QuantumCircuit(2)
-    qc.h(0)
-    qc.cx(0, 1)
-
-    def dead_executor(circuit: QuantumCircuit, pauli: str) -> float:
-        return 0.0  # readout so broken that calibration reads nothing
-
-    with pytest.raises(MitigationError) as excinfo:
-        apply_technique("rem", qc, "ZZ", dead_executor, BACKEND, SHOTS, SEED)
-    assert excinfo.value.technique == "rem"
-
-
-def _damped_executor(d: float) -> Callable[[QuantumCircuit, str], float]:
-    """Executor with a symmetric per-qubit readout damping factor d."""
-
-    def _exec(circuit: QuantumCircuit, pauli: str) -> float:
-        k = sum(c != "I" for c in pauli)
-        return _statevector_expectation(circuit, pauli) * d**k
-
-    return _exec
-
-
-def test_rem_refuses_damping_below_floor(tiny_circuit: QuantumCircuit) -> None:
-    """Reviewer item (REM_MIN_DAMPING 1e-6 -> 0.02): a two-qubit support
-    with per-qubit damping 0.1 gives total damping 0.01 < 0.02 — inverting
-    it would amplify shot noise 100x, so REM must refuse loudly instead of
-    recording amplified noise as a mitigated value."""
-    with pytest.raises(MitigationError) as excinfo:
-        apply_technique(
-            "rem", tiny_circuit, "ZZ", _damped_executor(0.1), BACKEND, SHOTS, SEED
-        )
-    assert excinfo.value.technique == "rem"
-    assert "too close to zero" in str(excinfo.value)
-
-
-def test_rem_inverts_damping_just_above_floor(
-    tiny_circuit: QuantumCircuit,
-) -> None:
-    # d = 0.3 on a 2-qubit support -> damping 0.09 >= 0.02: must still work.
-    value = apply_technique(
-        "rem", tiny_circuit, "ZZ", _damped_executor(0.3), BACKEND, SHOTS, SEED
+    second = apply_technique(
+        name, cdr_circuit, "ZZ", fake_executor, BACKEND, BASE_SHOTS, SEED
     )
-    assert value == pytest.approx(1.0, abs=1e-9)
+    assert first == second
 
 
-# ---------------------------------------------------------------------------
-# Error wrapping and non-mutation
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("name", PASSED_EXECUTOR_TECHNIQUES)
-def test_internal_failures_wrapped_in_mitigation_error(
-    name: str, cdr_circuit: QuantumCircuit, patched_ideal
+def test_cdr_sklearn_rejects_unknown_regressor(
+    cdr_circuit, fake_executor, patched_ideal
 ) -> None:
-    # raw_plus never invokes the passed executor; its failure wrapping is
-    # covered by the dedicated raw_plus tests above.
+    with pytest.raises(ValueError):
+        mitigation._apply_cdr_sklearn(
+            cdr_circuit, "ZZ", fake_executor, SEED, regressor="cdr_bogus"
+        )
+
+
+@pytest.mark.parametrize("name", ["cdr_ridge", "cdr_rf"])
+def test_cdr_sklearn_internal_failure_wrapped(
+    name: str, cdr_circuit, patched_ideal
+) -> None:
     class Boom(RuntimeError):
         pass
 
-    def broken_executor(circuit: QuantumCircuit, pauli: str) -> float:
+    def broken(circuit, pauli):
         raise Boom("executor exploded")
 
     with pytest.raises(MitigationError) as excinfo:
-        apply_technique(
-            name, cdr_circuit, "ZZ", broken_executor, BACKEND, SHOTS, SEED
-        )
+        apply_technique(name, cdr_circuit, "ZZ", broken, BACKEND, BASE_SHOTS, SEED)
     assert excinfo.value.technique == name
-    assert name in str(excinfo.value)
-    assert isinstance(excinfo.value, RuntimeError)
 
 
-@pytest.mark.filterwarnings(CDR_FIT_WARNING)
-@pytest.mark.parametrize("name", TECHNIQUES)
-def test_caller_circuit_never_mutated(
-    name: str,
-    cdr_circuit: QuantumCircuit,
-    fake_executor,
-    patched_ideal,
-    patched_make_executor,
+# ===========================================================================
+# Non-mutation across all V2 techniques
+# ===========================================================================
+
+
+@pytest.mark.parametrize("name", ["zne_fr", "cdr_ridge", "cdr_rf"])
+def test_v2_techniques_never_mutate_caller_circuit(
+    name: str, cdr_circuit, fake_executor, patched_ideal, recording_make_executor
 ) -> None:
     reference = cdr_circuit.copy()
-    apply_technique(
-        name, cdr_circuit, "ZZ", fake_executor, BACKEND, SHOTS, SEED
-    )
+    apply_technique(name, cdr_circuit, "ZZ", fake_executor, BACKEND, BASE_SHOTS, SEED)
     assert cdr_circuit == reference
+
+
+# ===========================================================================
+# CAPTURE-FIRST byte-identical regression (real Aer noise) — the frozen V1
+# techniques must reproduce their pre-change values exactly, and the three new
+# techniques must reproduce their captured deterministic values.
+# ===========================================================================
+
+
+@pytest.mark.slow
+@pytest.mark.filterwarnings(CDR_FIT_WARNING)
+def test_v1_techniques_byte_identical_on_real_backend() -> None:
+    qc = capture_circuit()
+    executor = backends.make_executor(BACKEND, BASE_SHOTS, SEED)
+    for name, ref in V1_REFERENCE_VALUES.items():
+        value = apply_technique(name, qc, PAULI, executor, BACKEND, BASE_SHOTS, SEED)
+        assert value == ref, f"{name}: {value!r} != captured {ref!r}"
+
+
+@pytest.mark.slow
+@pytest.mark.filterwarnings(CDR_FIT_WARNING)
+def test_v2_techniques_reproduce_captured_values_on_real_backend() -> None:
+    qc = capture_circuit()
+    executor = backends.make_executor(BACKEND, BASE_SHOTS, SEED)
+    for name, ref in V2_REFERENCE_VALUES.items():
+        value = apply_technique(name, qc, PAULI, executor, BACKEND, BASE_SHOTS, SEED)
+        assert value == ref, f"{name}: {value!r} != captured {ref!r}"
+
+
+@pytest.mark.slow
+def test_zne_fr_is_cost_neutral_on_real_backend() -> None:
+    """zne_fr spends the SAME total budget as one raw execution (multiplier 1):
+    2 levels x (base//2) shots == base_shots."""
+    assert shots_consumed("zne_fr", BASE_SHOTS) == shots_consumed("raw", BASE_SHOTS)

@@ -44,6 +44,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "(hardware_confirmed: true and credentials are still required)"
         ),
     )
+    parser.add_argument(
+        "--parallel",
+        "-j",
+        type=int,
+        default=1,
+        help="number of parallel workers to run simulated backends (default: 1)",
+    )
     return parser.parse_args(argv)
 
 
@@ -97,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 3
 
     try:
-        df = run_experiment(config, out_dir)
+        df = run_experiment(config, out_dir, num_workers=args.parallel)
     except ValueError as exc:
         # Config errors (including the real-hardware credential/confirmation
         # gates) get a clean one-line error instead of a traceback.

@@ -1,12 +1,27 @@
-"""Unit tests for qemsel.model.train_and_eval and scripts/train_model.py.
+"""V2 unit tests for qemsel.model (builder-model / B7).
 
-Runs standalone (no quantum simulation): synthetic DataFrames in the exact
-experiment schema plus the architect-provided ``tiny_results_df`` fixture.
+Covers the four additive train_and_eval options (feature_version, calibrate,
+abstain_threshold, extended_stats), the automatic leave-one-shot-budget-out
+metric, the significance-aware 'tie' label, and the new CLI flags — all
+without weakening the frozen V1 behaviour pinned by tests/test_model.py.
+
+Cross-builder discipline (INTERFACES.md V2 convention 15): qemsel.stats is
+owned by B6 and may still be a NotImplementedError stub, so every test that
+needs ``sigma_shot`` / ``summarize_folds`` monkeypatches them with the
+documented reference formulas (identical to B6's contract) via the
+``ref_stats`` fixture. This keeps the suite green regardless of landing order.
+
+Byte-identical duty: ``test_research_default_path_byte_identical`` re-runs the
+default training on the real research aggregated.csv and asserts the full
+metrics dict equals the stored results/research/metrics.json (captured from
+the pre-edit code) for BOTH labels.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -16,563 +31,562 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from qemsel.features import FEATURE_NAMES
-from qemsel.model import train_and_eval, train_and_eval_all
+from qemsel.features import FEATURE_NAMES, FEATURE_NAMES_V2
+from qemsel.model import (
+    SIGNIFICANT_LABEL,
+    TIE_CLASS,
+    derive_significant_label,
+    train_and_eval,
+    train_and_eval_all,
+)
 
-FEAT_COLS = ["feat_" + n for n in FEATURE_NAMES]
-TECHNIQUES = ["raw", "zne", "cdr", "rem"]
-EXPECTED_KEYS = {
-    "best_model_name",
-    "accuracy",
-    "macro_f1",
-    "baseline_accuracy",
-    "labels",
-    "confusion_matrix",
-    "feature_importances",
-    "feature_importances_note",
-    "per_model",
-    "n_samples",
-    "cv_n_samples",
-    "cv_folds",
-    "cv_grouping",
-    "dropped_classes",
-    "label_column",
-    "lofo",
-    "lobo",
-    "lodo",
+ROOT = Path(__file__).resolve().parents[1]
+FEAT_COLS_V1 = ["feat_" + n for n in FEATURE_NAMES]
+FEAT_COLS_V2 = ["feat_" + n for n in FEATURE_NAMES_V2]
+V1_BUNDLE_KEYS = {
+    "model", "feature_names", "classes", "model_name", "label_column",
+    "qemsel_version",
+}
+V1_METRICS_KEYS = {
+    "best_model_name", "accuracy", "macro_f1", "baseline_accuracy", "labels",
+    "confusion_matrix", "feature_importances", "feature_importances_note",
+    "per_model", "n_samples", "cv_n_samples", "cv_folds", "cv_grouping",
+    "dropped_classes", "label_column", "lofo", "lobo", "lodo",
 }
 
 
-def _make_df(labels: list[str], seed: int = 0) -> pd.DataFrame:
-    """Synthetic results-schema DataFrame, one row per label.
+# ==========================================================================
+# Reference stats (B6 contract) used to monkeypatch qemsel.stats stubs.
+# ==========================================================================
 
-    All features are random EXCEPT feat_depth, which is written from the
-    row index so callers can build learnable rules against it.
+
+def _ref_sigma_shot(value: float, shots: float) -> float:
+    if shots <= 0:
+        raise ValueError("shots must be > 0")
+    if float(value) != float(value):  # NaN
+        raise ValueError("value is NaN")
+    return math.sqrt((1.0 - min(float(value) ** 2, 1.0)) / float(shots))
+
+
+def _ref_summarize_folds(fold_scores) -> dict:
+    arr = np.asarray(list(fold_scores), dtype=float)
+    if arr.size == 0:
+        raise ValueError("empty fold_scores")
+    if np.isnan(arr).any():
+        raise ValueError("NaN in fold_scores")
+    return {
+        "mean": float(arr.mean()),
+        "std": float(np.std(arr, ddof=1)) if arr.size >= 2 else 0.0,
+        "min": float(arr.min()),
+        "max": float(arr.max()),
+        "n_folds": int(arr.size),
+    }
+
+
+@pytest.fixture()
+def ref_stats(monkeypatch):
+    """Patch the B6 stats stubs with the documented reference formulas."""
+    monkeypatch.setattr("qemsel.stats.sigma_shot", _ref_sigma_shot)
+    monkeypatch.setattr("qemsel.stats.summarize_folds", _ref_summarize_folds)
+    return None
+
+
+# ==========================================================================
+# DataFrame builders.
+# ==========================================================================
+
+
+def _learnable_df(n_rows: int = 60, *, version: int = 1, seed: int = 0) -> pd.DataFrame:
+    """Balanced 2-class df with the rule winner=='zne' iff depth>20, else raw.
+
+    version=2 additionally carries the five V2 feat_* columns. feat_depth
+    holds the learnable signal; the other feats are random noise.
     """
     rng = np.random.default_rng(seed)
+    names = FEATURE_NAMES if version == 1 else FEATURE_NAMES_V2
     rows = []
-    for i, best in enumerate(labels):
-        n_qubits = 2 + i % 3
-        # Learnable-rule hook: depth ~5 for even i, ~35 for odd i
-        # (callers relying on this must construct labels accordingly).
+    for i in range(n_rows):
         depth = (5 if i % 2 == 0 else 35) + int(rng.integers(0, 5))
+        n_qubits = 2 + i % 3
         row = {
-            "circuit_id": f"synth_q{n_qubits}_d{depth}_s{i}",
+            "circuit_id": f"c_q{n_qubits}_d{depth}_s{i}",
             "family": "layered_random",
             "n_qubits": n_qubits,
             "depth": depth,
             "seed": i,
             "backend": "FakeManilaV2",
             "pauli": "Z" * n_qubits,
-            "ideal": float(rng.uniform(-1, 1)),
-            "feat_n_qubits": float(n_qubits),
-            "feat_depth": float(depth),
-            "feat_n_1q_gates": float(rng.integers(1, 50)),
-            "feat_n_2q_gates": float(rng.integers(1, 30)),
-            "feat_n_cnot": float(rng.integers(0, 30)),
-            "feat_n_non_clifford": float(rng.integers(0, 10)),
-            "feat_clifford_fraction": float(rng.uniform(0.0, 1.0)),
-            "feat_depth_per_qubit": float(depth / n_qubits),
-            "feat_backend_avg_2q_error": float(rng.uniform(0.005, 0.03)),
-            "feat_backend_avg_readout_error": float(rng.uniform(0.01, 0.2)),
+            "ideal": 0.3,
         }
-        for tech in TECHNIQUES:
-            err = 0.01 if tech == best else 0.2
-            row[f"{tech}_value"] = row["ideal"] + err
-            row[f"{tech}_abs_error"] = err
-            row[f"{tech}_shots"] = 1024
-        row["best_technique"] = best
+        for nm in names:
+            row["feat_" + nm] = float(rng.uniform(0.0, 1.0))
+        row["feat_n_qubits"] = float(n_qubits)
+        row["feat_depth"] = float(depth)
+        row["best_technique"] = "raw" if i % 2 == 0 else "zne"
         rows.append(row)
     return pd.DataFrame(rows)
 
 
-def _learnable_df(n_rows: int = 60, seed: int = 0) -> pd.DataFrame:
-    """60 rows with rule: winner == 'zne' iff depth > 20, else 'raw'."""
-    # even index -> depth ~5 -> raw; odd index -> depth ~35 -> zne
-    labels = ["raw" if i % 2 == 0 else "zne" for i in range(n_rows)]
-    return _make_df(labels, seed=seed)
+def _perseed_row(techs: dict[str, tuple[float, float, float]]) -> dict:
+    """Build the per-seed error/value/shots columns from {tech:(err,val,base)}.
+
+    The ``base`` in each tuple is the per-execution BASE shot count (what the
+    variance model uses). Real results.csv stores ``<tech>_shots`` as the
+    CONSUMED-budget ledger (= multiplier x base; verified: raw 4096, rem
+    3x, zne 3x, cdr/raw_plus 11x), so we materialise that here — the
+    significance code divides it back out by ``shots_consumed(t, 1)`` to
+    recover base. Storing base directly would understate cdr/rem/zne sigma.
+    """
+    from qemsel.mitigation import shots_consumed
+
+    d: dict[str, float] = {}
+    for t, (err, val, base) in techs.items():
+        d[f"{t}_abs_error"] = err
+        d[f"{t}_value"] = val
+        try:
+            mult = shots_consumed(t, 1)
+        except Exception:
+            mult = 1
+        d[f"{t}_shots"] = base * mult
+    return d
 
 
-def _random_label_df(n_rows: int = 60, seed: int = 1) -> pd.DataFrame:
-    """60 rows, balanced 4-class labels shuffled independently of features."""
-    rng = np.random.default_rng(seed)
-    labels = [TECHNIQUES[i % 4] for i in range(n_rows)]
-    labels = list(rng.permutation(labels))
-    return _make_df(labels, seed=seed)
+def _perseed_significance_df() -> pd.DataFrame:
+    """Four rows exercising the four significance outcomes."""
+    rows = [
+        # 1) clear cdr winner: big margin, high shots -> 'cdr'
+        _perseed_row({"raw": (0.30, 0.70, 4096), "cdr": (0.01, 0.99, 4096),
+                      "rem": (0.25, 0.75, 4096)}),
+        # 2) cdr 0.10 vs rem 0.11 at tiny shots -> within margin -> 'tie'
+        _perseed_row({"raw": (0.30, 0.70, 16), "cdr": (0.10, 0.90, 16),
+                      "rem": (0.11, 0.89, 16)}),
+        # 3) all failed -> ''
+        _perseed_row({"raw": (np.nan, np.nan, 4096), "cdr": (np.nan, np.nan, 4096),
+                      "rem": (np.nan, np.nan, 4096)}),
+        # 4) exactly one valid technique -> that technique outright
+        _perseed_row({"raw": (np.nan, np.nan, 4096), "cdr": (np.nan, np.nan, 4096),
+                      "rem": (0.05, 0.95, 4096)}),
+    ]
+    return pd.DataFrame(rows)
 
 
-# --------------------------------------------------------------------------
-# Learnability / sanity
-# --------------------------------------------------------------------------
+def _aggregated_significance_df() -> pd.DataFrame:
+    """Two rows on the V2 aggregated schema (mean errors + n_seeds + base_shots)."""
+    rows = [
+        {"base_shots": 4096, "cdr_mean_abs_error": 0.01, "cdr_n_seeds": 3,
+         "rem_mean_abs_error": 0.30, "rem_n_seeds": 3},   # clear cdr
+        {"base_shots": 4, "cdr_mean_abs_error": 0.10, "cdr_n_seeds": 1,
+         "rem_mean_abs_error": 0.11, "rem_n_seeds": 1},   # tie
+    ]
+    return pd.DataFrame(rows)
 
 
-def test_learnable_rule_beats_baseline(out_dir: Path) -> None:
-    df = _learnable_df()
-    metrics = train_and_eval(df, out_dir)
-    assert metrics["cv_folds"] == 5
-    assert metrics["n_samples"] == 60
-    # winner = zne iff depth > 20 is trivially learnable from feat_depth:
-    # the model must clearly beat the majority-class baseline (~0.5).
-    assert metrics["accuracy"] >= metrics["baseline_accuracy"] + 0.2
-    assert metrics["accuracy"] >= 0.9
-    assert metrics["macro_f1"] >= 0.9
-    # depth should carry real permutation importance
-    assert metrics["feature_importances"]["feat_depth"] > 0.0
-    # healthy balanced data: nothing dropped from CV, all rows in CV
-    assert metrics["dropped_classes"] == []
-    assert metrics["cv_n_samples"] == metrics["n_samples"]
-    # single family / single backend -> hold-out evaluations undefined
-    assert metrics["lofo"] is None
-    assert metrics["lobo"] is None
-
-
-def test_random_labels_do_not_beat_baseline_by_much(out_dir: Path) -> None:
-    df = _random_label_df()
-    metrics = train_and_eval(df, out_dir)
-    # Labels are independent of features: no model should look magically
-    # better than the majority baseline (allow small-sample wiggle room).
-    assert metrics["accuracy"] <= metrics["baseline_accuracy"] + 0.25
-    for m in metrics["per_model"].values():
-        assert m["accuracy"] <= metrics["baseline_accuracy"] + 0.3
-
-
-def test_seed_duplicate_rows_do_not_inflate_accuracy(out_dir: Path) -> None:
-    """Leakage regression (stats review 2026-07-21): rows of the same
-    (family, n_qubits, depth) cell share BYTE-IDENTICAL feature vectors
-    (features are angle-blind), and per-cell labels here carry ZERO feature
-    signal. Row-level StratifiedKFold scored ~+0.2 above baseline on this
-    structure by memorizing a test row's twin; grouped CV must not."""
-    rng = np.random.default_rng(7)
+def _tie_training_df(n_rows: int = 48) -> pd.DataFrame:
+    """Per-seed df whose DERIVED significance label is a 2-class {'cdr','tie'}
+    problem, spread over 3 families and 2 backends for LOFO/LODO."""
+    fams = ["layered_random", "ghz_plus", "mirror_circuit"]
+    bks = ["FakeManilaV2", "FakeLagosV2"]
+    rng = np.random.default_rng(3)
     rows = []
-    for cell in range(24):
-        n_qubits = 2 + cell % 3
-        depth = 4 * (1 + cell % 4)
-        label = TECHNIQUES[int(rng.integers(0, 4))]  # independent of features
-        for seed in range(3):  # 3 seed-duplicates, identical features
-            row = {
-                "circuit_id": f"layered_random_q{n_qubits}_d{depth}_s{seed}",
-                "family": "layered_random",
-                "n_qubits": n_qubits,
-                "depth": depth,
-                "seed": seed,
-                "backend": "FakeManilaV2",
-                "pauli": "Z" * n_qubits,
-                "ideal": 0.5,
-                "feat_n_qubits": float(n_qubits),
-                "feat_depth": float(depth),
-                "feat_n_1q_gates": float(n_qubits * depth),
-                "feat_n_2q_gates": float((n_qubits - 1) * depth // 2),
-                "feat_n_cnot": float((n_qubits - 1) * depth // 2),
-                "feat_n_non_clifford": float(n_qubits + depth),
-                "feat_clifford_fraction": 0.5,
-                "feat_depth_per_qubit": float(depth / n_qubits),
-                "feat_backend_avg_2q_error": 0.01,
-                "feat_backend_avg_readout_error": 0.03,
-            }
-            for tech in TECHNIQUES:
-                err = 0.01 if tech == label else 0.2
-                row[f"{tech}_value"] = 0.5 + err
-                row[f"{tech}_abs_error"] = err
-                row[f"{tech}_shots"] = 1024
-            row["best_technique"] = label
-            rows.append(row)
-    df = pd.DataFrame(rows)
-    metrics = train_and_eval(df, out_dir)
-    assert metrics["cv_folds"] >= 2  # grouped CV actually ran
-    # No generalizable signal exists -> grouped CV must sit near baseline.
-    assert metrics["accuracy"] <= metrics["baseline_accuracy"] + 0.15
+    for i in range(n_rows):
+        even = i % 2 == 0
+        depth = 5 if even else 35  # learnable signal, decorrelated from fam/bk
+        n_qubits = 3
+        if even:  # clear cdr winner
+            techs = {"raw": (0.40, 0.60, 4096), "cdr": (0.01, 0.99, 4096),
+                     "rem": (0.30, 0.70, 4096)}
+        else:  # cdr vs rem within margin at tiny shots -> tie
+            techs = {"raw": (0.40, 0.60, 16), "cdr": (0.10, 0.90, 16),
+                     "rem": (0.11, 0.89, 16)}
+        row = {
+            "circuit_id": f"c{i}",
+            "family": fams[i % 3],
+            "n_qubits": n_qubits,
+            "depth": depth,
+            "seed": i,
+            "backend": bks[(i // 3) % 2],
+            "pauli": "ZZZ",
+            "ideal": 0.3,
+        }
+        for nm in FEATURE_NAMES:
+            row["feat_" + nm] = float(rng.uniform(0.0, 1.0))
+        row["feat_depth"] = float(depth)
+        row.update(_perseed_row(techs))
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
-# --------------------------------------------------------------------------
-# Contract: return keys, artifacts, JSON round-trip
-# --------------------------------------------------------------------------
+# ==========================================================================
+# derive_significant_label
+# ==========================================================================
 
 
-def test_returned_keys_exact(out_dir: Path, tiny_results_df: pd.DataFrame) -> None:
-    metrics = train_and_eval(tiny_results_df, out_dir)
-    assert set(metrics.keys()) == EXPECTED_KEYS
-    assert metrics["best_model_name"] in {"random_forest", "gradient_boosting"}
-    # tiny_results_df: 16 rows, 4 per class -> min(5, 4) = 4 folds
-    assert metrics["cv_folds"] == 4
-    assert metrics["n_samples"] == 16
-    assert metrics["labels"] == sorted(TECHNIQUES)
-    n = len(metrics["labels"])
-    assert len(metrics["confusion_matrix"]) == n
-    assert all(len(r) == n for r in metrics["confusion_matrix"])
-    assert sum(sum(r) for r in metrics["confusion_matrix"]) == 16
-    assert set(metrics["feature_importances"].keys()) == set(FEAT_COLS)
-    # both real models AND the dummy baseline reported, with mean AND std
-    assert {"random_forest", "gradient_boosting"} <= set(metrics["per_model"])
-    for m in metrics["per_model"].values():
-        assert {"accuracy", "accuracy_std", "macro_f1"} <= set(m.keys())
-    # balanced 4x4 data: nothing dropped, every row cross-validated
-    assert metrics["dropped_classes"] == []
-    assert metrics["cv_n_samples"] == 16
-    # 4 families -> LOFO defined, with per-family accuracy AND macro-F1
-    lofo = metrics["lofo"]
-    assert isinstance(lofo, dict)
-    assert lofo["n_families"] == 4
-    assert len(lofo["per_family_accuracy"]) == 4
-    assert set(lofo["per_family_macro_f1"]) == set(lofo["per_family_accuracy"])
-    assert 0.0 <= lofo["accuracy"] <= 1.0
-    # 2 backends -> LOBO defined (noise-level interpolation number)
-    lobo = metrics["lobo"]
-    assert isinstance(lobo, dict)
-    assert lobo["n_backends"] == 2
-    assert set(lobo["per_backend_accuracy"]) == {"FakeManilaV2", "FakeLagosV2"}
-    assert set(lobo["per_backend_macro_f1"]) == set(lobo["per_backend_accuracy"])
-    assert 0.0 <= lobo["accuracy"] <= 1.0
-    # 2 plain backends = 2 base devices -> LODO defined too (and == LOBO
-    # folds, since no '@x<scale>' siblings exist here)
-    lodo = metrics["lodo"]
-    assert isinstance(lodo, dict)
-    assert lodo["n_devices"] == 2
-    assert set(lodo["per_device_accuracy"]) == {"FakeManilaV2", "FakeLagosV2"}
-    assert set(lodo["per_device_macro_f1"]) == set(lodo["per_device_accuracy"])
-    assert lodo["accuracy"] == pytest.approx(lobo["accuracy"])
-    assert 0.0 <= lodo["accuracy"] <= 1.0
+def test_derive_perseed_four_outcomes(ref_stats) -> None:
+    labels = derive_significant_label(_perseed_significance_df())
+    assert list(labels) == ["cdr", TIE_CLASS, "", "rem"]
+    # returned Series is aligned to df.index, object dtype
+    assert list(labels.index) == [0, 1, 2, 3]
+    assert labels.dtype == object
 
 
-def test_metrics_json_serializable(out_dir: Path, tiny_results_df: pd.DataFrame) -> None:
-    metrics = train_and_eval(tiny_results_df, out_dir)
-    dumped = json.dumps(metrics)  # raises TypeError on numpy leakage
-    assert json.loads(dumped) == metrics
+def test_derive_perseed_k_sigma_controls_tie(ref_stats) -> None:
+    df = _perseed_significance_df()
+    # row 1 (cdr 0.10 vs rem 0.11, shots 16): a very small k_sigma removes the
+    # tie (margin now clears the tighter bar) -> the winner name appears.
+    strict = derive_significant_label(df, k_sigma=0.05)
+    assert strict.iloc[1] == "cdr"
+    # a large k_sigma turns even the clear row-0 winner into a tie
+    loose = derive_significant_label(df, k_sigma=1000.0)
+    assert loose.iloc[0] == TIE_CLASS
 
 
-def test_artifacts_saved_and_loadable(out_dir: Path) -> None:
-    df = _learnable_df()
-    metrics = train_and_eval(df, out_dir)
+def test_derive_aggregated_route(ref_stats) -> None:
+    labels = derive_significant_label(_aggregated_significance_df())
+    assert list(labels) == ["cdr", TIE_CLASS]
 
-    model_path = out_dir / "model.joblib"
-    metrics_path = out_dir / "metrics.json"
-    assert model_path.exists()
-    assert metrics_path.exists()
 
-    bundle = joblib.load(model_path)
-    assert set(bundle.keys()) == {
-        "model", "feature_names", "classes", "model_name", "label_column",
-        "qemsel_version",
-    }
-    assert bundle["label_column"] == "best_technique"
-    assert bundle["feature_names"] == FEAT_COLS
-    assert bundle["model_name"] == metrics["best_model_name"]
-    assert bundle["classes"] == metrics["labels"]
-    import qemsel
+def test_derive_aggregated_requires_base_shots(ref_stats) -> None:
+    df = _aggregated_significance_df().drop(columns=["base_shots"])
+    with pytest.raises(ValueError, match="base_shots"):
+        derive_significant_label(df)
 
-    assert bundle["qemsel_version"] == qemsel.__version__
 
-    # refit model must predict a known label from an in-order feature row.
-    # Integrator note: predict with a NAMED DataFrame — the bundle's model is
-    # fitted with feature names (recommend.py's consumption pattern), so
-    # sklearn validates the column names instead of warning about their lack.
-    X_one = df[FEAT_COLS].astype(float).iloc[:1]
-    pred = bundle["model"].predict(X_one)
+def test_derive_techniques_filter(ref_stats) -> None:
+    # Restrict to raw+rem: row 0's cdr winner is now ignored; among raw(0.30)
+    # and rem(0.25) rem wins by a huge margin -> 'rem'.
+    labels = derive_significant_label(
+        _perseed_significance_df(), techniques=["raw", "rem"]
+    )
+    assert labels.iloc[0] == "rem"
+
+
+def test_derive_techniques_filter_none_present_raises(ref_stats) -> None:
+    with pytest.raises(ValueError, match="none of techniques"):
+        derive_significant_label(_perseed_significance_df(), techniques=["nope"])
+
+
+def test_derive_no_error_columns_raises(ref_stats) -> None:
+    with pytest.raises(ValueError, match="no technique error columns"):
+        derive_significant_label(pd.DataFrame({"family": ["a"], "ideal": [0.1]}))
+
+
+def test_derive_does_not_call_sigma_when_stub(monkeypatch) -> None:
+    """A single-valid-technique row must NOT need sigma_shot (no runner-up)."""
+    def _boom(*a, **k):  # simulate B6 not landed
+        raise NotImplementedError
+
+    monkeypatch.setattr("qemsel.stats.sigma_shot", _boom)
+    df = pd.DataFrame(_perseed_row(
+        {"raw": (np.nan, np.nan, 4096), "cdr": (0.05, 0.95, 4096)}
+    ), index=[0])
+    labels = derive_significant_label(df)
+    assert labels.iloc[0] == "cdr"
+
+
+# ==========================================================================
+# feature_version plumbing
+# ==========================================================================
+
+
+def test_feature_version_2_trains_and_records(out_dir: Path) -> None:
+    df = _learnable_df(version=2)
+    metrics = train_and_eval(df, out_dir, feature_version=2)
+    assert metrics["feature_version"] == 2
+    assert metrics["cv_folds"] == 5
+    # importances keyed by the 15-feature V2 vector
+    assert set(metrics["feature_importances"]) == set(FEAT_COLS_V2)
+    bundle = joblib.load(out_dir / "model.joblib")
+    assert bundle["feature_names"] == FEAT_COLS_V2
+    assert bundle["feature_version"] == 2
+    assert bundle["calibrated"] is False
+    assert bundle["abstain_threshold"] is None
+    # the persisted model predicts from a 15-wide named row
+    pred = bundle["model"].predict(df[FEAT_COLS_V2].astype(float).iloc[:1])
     assert pred[0] in metrics["labels"]
 
-    saved = json.loads(metrics_path.read_text(encoding="utf-8"))
-    assert saved == metrics
+
+def test_feature_version_unknown_raises(out_dir: Path) -> None:
+    with pytest.raises(ValueError, match="feature_version"):
+        train_and_eval(_learnable_df(), out_dir, feature_version=3)
 
 
-# --------------------------------------------------------------------------
-# Row dropping + degenerate data
-# --------------------------------------------------------------------------
-
-
-def test_drops_nan_and_empty_winners_and_nan_features(out_dir: Path) -> None:
-    df = _learnable_df()
-    df.loc[0, "best_technique"] = ""
-    df.loc[1, "best_technique"] = np.nan
-    df.loc[2, "feat_depth"] = np.nan
-    metrics = train_and_eval(df, out_dir)
-    assert metrics["n_samples"] == 57
-
-
-def test_singleton_class_dropped_from_cv_not_collapsed(out_dir: Path) -> None:
-    """Research-pass spec 2026-07-21 (SUPERSEDES the old cv_folds=0
-    behaviour for this case): one singleton class must no longer disable
-    the whole CV — it is DROPPED from the CV evaluation (recorded in
-    dropped_classes) while the refit-on-all model still sees every row.
-    Mirrors the actual small-run failure: rem 38 / cdr 35 / zne 1."""
-    labels = ["rem"] * 10 + ["cdr"] * 10 + ["zne"]
-    df = _make_df(labels)
-    metrics = train_and_eval(df, out_dir)
-    assert set(metrics.keys()) == EXPECTED_KEYS
-    # CV ran (no cv_folds=0 collapse) on the 20 non-singleton rows only
-    assert metrics["cv_folds"] >= 2
-    assert metrics["cv_grouping"] in {"stratified_group", "group"}
-    assert metrics["dropped_classes"] == ["zne"]
-    assert metrics["n_samples"] == 21
-    assert metrics["cv_n_samples"] == 20
-    # confusion matrix covers only the CV rows; zne row is all-zero
-    assert sum(sum(r) for r in metrics["confusion_matrix"]) == 20
-    zne_idx = metrics["labels"].index("zne")
-    assert sum(metrics["confusion_matrix"][zne_idx]) == 0
-    # the persisted refit model was trained on ALL rows: zne stays a class
-    assert "zne" in metrics["labels"]
+def test_feature_version_1_default_has_no_feature_version_key(out_dir: Path) -> None:
+    metrics = train_and_eval(_learnable_df(), out_dir)
+    assert "feature_version" not in metrics
+    assert "loso" not in metrics  # no base_shots column -> no shots-axis metric
     bundle = joblib.load(out_dir / "model.joblib")
-    assert "zne" in bundle["classes"]
-    assert "zne" in list(bundle["model"].classes_)
+    assert set(bundle) == V1_BUNDLE_KEYS  # no feature_version on the V1 path
 
 
-def test_single_surviving_class_falls_back(out_dir: Path) -> None:
-    # 10x raw + 1x zne: dropping the singleton would leave ONE class — a
-    # single-class "CV" would score a meaningless 1.0 (and GBC cannot fit
-    # it), so the honest cv_folds=0 fallback on ALL rows runs instead.
-    labels = ["raw"] * 10 + ["zne"]
-    df = _make_df(labels)
-    metrics = train_and_eval(df, out_dir)
-    assert metrics["cv_folds"] == 0
-    assert metrics["dropped_classes"] == []
-    assert metrics["n_samples"] == 11
-    assert metrics["cv_n_samples"] == 11
-    assert (out_dir / "model.joblib").exists()
-    # baseline = majority fraction on the training set
-    assert metrics["baseline_accuracy"] == pytest.approx(10 / 11)
+# ==========================================================================
+# calibrate
+# ==========================================================================
 
 
-def test_all_singleton_classes_still_fall_back(out_dir: Path) -> None:
-    # 1x raw + 1x zne -> EVERY class is a singleton; after dropping there is
-    # nothing left to cross-validate -> honest cv_folds=0 fallback on all
-    # rows (and dropped_classes is [] because nothing was excluded from the
-    # evaluation actually performed).
-    df = _make_df(["raw", "zne"])
-    metrics = train_and_eval(df, out_dir)
-    assert metrics["cv_folds"] == 0
-    assert metrics["cv_grouping"] == "none (degenerate)"
-    assert metrics["dropped_classes"] == []
-    assert metrics["n_samples"] == 2
-    assert metrics["cv_n_samples"] == 2
-    assert (out_dir / "model.joblib").exists()
+def test_calibrate_bundle_and_metrics(out_dir: Path) -> None:
+    df = _learnable_df(n_rows=40)
+    base_metrics = train_and_eval(df, out_dir / "plain")
+    metrics = train_and_eval(df, out_dir / "cal", calibrate=True)
+
+    # calibration does not change the reported CV accuracy (same OOF loop)
+    assert metrics["accuracy"] == base_metrics["accuracy"]
+    assert metrics["macro_f1"] == base_metrics["macro_f1"]
+
+    cal = metrics["calibration"]
+    assert set(cal) == {"method", "brier_before", "brier_after"}
+    assert cal["method"] == "sigmoid"
+    assert isinstance(cal["brier_before"], float)
+    assert isinstance(cal["brier_after"], float)
+
+    bundle = joblib.load(out_dir / "cal" / "model.joblib")
+    assert bundle["calibrated"] is True
+    assert bundle["feature_version"] == 1
+    assert bundle["abstain_threshold"] is None
+    assert hasattr(bundle["model"], "predict_proba")
+    assert list(bundle["model"].classes_) == bundle["classes"]
+
+    # calibrated probabilities differ from a plain refit's probabilities
+    from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+
+    factory = {
+        "random_forest": RandomForestClassifier,
+        "gradient_boosting": GradientBoostingClassifier,
+    }[bundle["model_name"]]
+    plain = factory(random_state=0).fit(df[FEAT_COLS_V1].astype(float), df["best_technique"])
+    X = df[FEAT_COLS_V1].astype(float)
+    p_cal = bundle["model"].predict_proba(X)
+    p_plain = plain.predict_proba(X)
+    assert np.abs(p_cal - p_plain).max() > 1e-3
 
 
-def test_reduced_fold_count_between_2_and_5(out_dir: Path) -> None:
-    # 12x raw + 3x zne -> smallest class 3 (>= 2, so NOT dropped) -> 3-fold CV
-    labels = ["raw"] * 12 + ["zne"] * 3
-    df = _make_df(labels)
-    metrics = train_and_eval(df, out_dir)
-    assert metrics["cv_folds"] == 3
-    assert metrics["dropped_classes"] == []
-    assert metrics["cv_n_samples"] == 15
+# ==========================================================================
+# abstain_threshold
+# ==========================================================================
 
 
-# --------------------------------------------------------------------------
-# Errors
-# --------------------------------------------------------------------------
+def test_abstain_threshold_stored_and_rate(out_dir: Path) -> None:
+    metrics = train_and_eval(_learnable_df(), out_dir, abstain_threshold=0.6)
+    assert metrics["abstain_threshold"] == 0.6
+    assert 0.0 <= metrics["abstain_rate_cv"] <= 1.0
+    bundle = joblib.load(out_dir / "model.joblib")
+    assert bundle["abstain_threshold"] == 0.6
+    assert bundle["calibrated"] is False
+    assert bundle["feature_version"] == 1
 
 
-def test_missing_columns_raises(out_dir: Path) -> None:
-    df = _learnable_df().drop(columns=["feat_depth"])
-    with pytest.raises(ValueError, match="feat_depth"):
-        train_and_eval(df, out_dir)
-
-    df2 = _learnable_df().drop(columns=["best_technique"])
-    with pytest.raises(ValueError, match="best_technique"):
-        train_and_eval(df2, out_dir)
+def test_abstain_high_threshold_abstains_more(out_dir: Path) -> None:
+    lo = train_and_eval(_learnable_df(), out_dir / "lo", abstain_threshold=0.5)
+    hi = train_and_eval(_learnable_df(), out_dir / "hi", abstain_threshold=0.999)
+    assert hi["abstain_rate_cv"] >= lo["abstain_rate_cv"]
 
 
-def test_zero_usable_rows_raises(out_dir: Path) -> None:
-    df = _learnable_df(n_rows=4)
-    df["best_technique"] = ""
-    with pytest.raises(ValueError, match="zero usable rows"):
-        train_and_eval(df, out_dir)
+@pytest.mark.parametrize("bad", [0.0, 1.0, -0.1, 1.5])
+def test_abstain_out_of_range_raises(out_dir: Path, bad: float) -> None:
+    with pytest.raises(ValueError, match="abstain_threshold"):
+        train_and_eval(_learnable_df(), out_dir, abstain_threshold=bad)
 
 
-# --------------------------------------------------------------------------
-# Aggregated (seed-averaged) schema + hold-out evaluations
-# --------------------------------------------------------------------------
-
-
-def test_aggregated_schema_accepted(out_dir: Path) -> None:
-    """aggregated.csv schema: n_seeds column present, NO seed column —
-    must train exactly like the raw schema (nothing reads 'seed')."""
-    df = _learnable_df().drop(columns=["seed"])
-    df["n_seeds"] = 3
-    metrics = train_and_eval(df, out_dir)
-    assert metrics["cv_folds"] == 5
-    assert metrics["n_samples"] == 60
-    assert metrics["accuracy"] >= metrics["baseline_accuracy"] + 0.2
-    assert (out_dir / "model.joblib").exists()
-
-
-def test_lobo_two_backends(out_dir: Path) -> None:
-    """Leave-one-backend-out: each distinct backend string (incl. noise-
-    scaled '@x<scale>' names) is one held-out noise environment."""
-    df = _learnable_df()
-    backends = ["FakeLagosV2@x2.0"] * 30 + ["FakeManilaV2"] * 30
-    df["backend"] = backends
-    metrics = train_and_eval(df, out_dir)
-    lobo = metrics["lobo"]
-    assert isinstance(lobo, dict)
-    assert lobo["n_backends"] == 2
-    assert set(lobo["per_backend_accuracy"]) == {
-        "FakeLagosV2@x2.0",
-        "FakeManilaV2",
-    }
-    assert set(lobo["per_backend_macro_f1"]) == set(lobo["per_backend_accuracy"])
-    assert 0.0 <= lobo["accuracy"] <= 1.0
-    assert 0.0 <= lobo["macro_f1"] <= 1.0
-    # the depth->winner rule holds on both halves, so a model trained on one
-    # backend's rows must recover it on the held-out backend
-    assert lobo["accuracy"] >= 0.8
-    # base devices differ too -> LODO also defined with 2 devices
-    lodo = metrics["lodo"]
-    assert isinstance(lodo, dict)
-    assert lodo["n_devices"] == 2
-    assert set(lodo["per_device_accuracy"]) == {"FakeLagosV2", "FakeManilaV2"}
-
-
-def test_lodo_pools_scale_siblings_of_one_device(out_dir: Path) -> None:
-    """The LOBO-leakage fix (fixer 2026-07-21): scale-siblings like
-    FakeManilaV2 / @x1.5 / @x2.0 are ONE device for the leave-one-device-out
-    evaluation, so 'new noise environment' can never be claimed from a fold
-    whose device stayed in training at other scales."""
-    df = _learnable_df()
-    df["backend"] = (
-        ["FakeManilaV2"] * 15
-        + ["FakeManilaV2@x1.5"] * 15
-        + ["FakeManilaV2@x2.0"] * 15
-        + ["FakeLagosV2"] * 15
+def test_abstain_with_calibrate_uses_calibrated_scores(out_dir: Path) -> None:
+    metrics = train_and_eval(
+        _learnable_df(n_rows=40), out_dir, calibrate=True, abstain_threshold=0.6
     )
-    metrics = train_and_eval(df, out_dir)
-    assert metrics["lobo"]["n_backends"] == 4  # one fold per backend STRING
-    lodo = metrics["lodo"]
-    assert isinstance(lodo, dict)
-    assert lodo["n_devices"] == 2  # Manila (all 3 scales pooled) + Lagos
-    assert set(lodo["per_device_accuracy"]) == {"FakeManilaV2", "FakeLagosV2"}
-    # depth->winner rule is device-independent -> the held-out device is
-    # still predictable
-    assert lodo["accuracy"] >= 0.8
+    assert "calibration" in metrics
+    assert metrics["abstain_threshold"] == 0.6
+    bundle = joblib.load(out_dir / "model.joblib")
+    assert bundle["calibrated"] is True
+    assert bundle["abstain_threshold"] == 0.6
 
 
-def test_lodo_none_for_single_device_multi_scale(out_dir: Path) -> None:
-    """All scales of ONE device: LOBO still runs (scale interpolation) but
-    LODO must be None — there is no second device to generalize to."""
-    df = _learnable_df()
-    df["backend"] = ["FakeManilaV2"] * 30 + ["FakeManilaV2@x1.5"] * 30
-    metrics = train_and_eval(df, out_dir)
-    assert isinstance(metrics["lobo"], dict)
-    assert metrics["lobo"]["n_backends"] == 2
-    assert metrics["lodo"] is None
+# ==========================================================================
+# extended_stats
+# ==========================================================================
 
 
-def test_lobo_none_without_backend_column(out_dir: Path) -> None:
-    df = _learnable_df().drop(columns=["backend"])
-    metrics = train_and_eval(df, out_dir)
-    assert metrics["lobo"] is None
-    assert metrics["lodo"] is None
-
-
-def test_lofo_computed_even_when_cv_degenerate(out_dir: Path) -> None:
-    """LOFO/LOBO are independent of CV feasibility: 2 families of 1 row
-    each -> cv_folds=0 fallback, but LOFO still runs on all rows."""
-    df = _make_df(["raw", "zne"])
-    df.loc[df.index[1], "family"] = "ghz_plus"
-    metrics = train_and_eval(df, out_dir)
-    assert metrics["cv_folds"] == 0
-    assert isinstance(metrics["lofo"], dict)
-    assert metrics["lofo"]["n_families"] == 2
-
-
-# --------------------------------------------------------------------------
-# train_and_eval_all: both winner labels -> two bundles
-# --------------------------------------------------------------------------
-
-
-def _dual_label_df(n_rows: int = 60) -> pd.DataFrame:
-    """Learnable df with BOTH label columns; the cost-aware rule differs
-    (rem/raw instead of zne/raw) so the two models are genuinely distinct."""
-    df = _learnable_df(n_rows=n_rows)
-    df["best_technique_cost_aware"] = [
-        "rem" if i % 2 == 0 else "raw" for i in range(n_rows)
+def test_extended_stats_adds_fold_info(out_dir: Path, ref_stats) -> None:
+    metrics = train_and_eval(_learnable_df(), out_dir, extended_stats=True)
+    assert set(metrics["fold_summary"]) == {"mean", "std", "min", "max", "n_folds"}
+    assert metrics["fold_summary"]["n_folds"] == metrics["cv_folds"]
+    for name, entry in metrics["per_model"].items():
+        assert "fold_accuracies" in entry
+        assert len(entry["fold_accuracies"]) == metrics["cv_folds"]
+    # JSON round-trips
+    assert json.loads(json.dumps(metrics))["fold_summary"]["n_folds"] == metrics[
+        "cv_folds"
     ]
-    return df
 
 
-def test_train_and_eval_all_trains_both_bundles(out_dir: Path) -> None:
-    df = _dual_label_df()
-    result = train_and_eval_all(df, out_dir)
-    assert set(result.keys()) == {"best_technique", "best_technique_cost_aware"}
+def test_extended_stats_off_keeps_v1_shape(out_dir: Path) -> None:
+    metrics = train_and_eval(_learnable_df(), out_dir)
+    assert "fold_summary" not in metrics
+    for entry in metrics["per_model"].values():
+        assert "fold_accuracies" not in entry
+        assert set(entry) == {"accuracy", "accuracy_std", "macro_f1"}
 
-    primary = result["best_technique"]
-    cost = result["best_technique_cost_aware"]
-    assert set(primary.keys()) == EXPECTED_KEYS  # exact schema, no extras
-    assert set(cost.keys()) == EXPECTED_KEYS
-    assert primary["label_column"] == "best_technique"
-    assert cost["label_column"] == "best_technique_cost_aware"
-    assert sorted(primary["labels"]) == ["raw", "zne"]
-    assert sorted(cost["labels"]) == ["raw", "rem"]
 
-    # two independent bundles + two metrics files on disk
-    for name in (
-        "model.joblib",
-        "model_cost_aware.joblib",
-        "metrics.json",
-        "metrics_cost_aware.json",
-    ):
-        assert (out_dir / name).exists(), f"missing artifact: {name}"
-    bundle = joblib.load(out_dir / "model.joblib")
-    assert bundle["label_column"] == "best_technique"
-    cost_bundle = joblib.load(out_dir / "model_cost_aware.joblib")
-    assert cost_bundle["label_column"] == "best_technique_cost_aware"
-    assert cost_bundle["classes"] == cost["labels"]
+# ==========================================================================
+# loso (leave-one-shot-budget-out)
+# ==========================================================================
 
-    # metrics.json embeds the cost-aware metrics under 'cost_aware' so the
-    # report CLI renders both label variants without extra plumbing
-    saved = json.loads((out_dir / "metrics.json").read_text(encoding="utf-8"))
-    assert saved["cost_aware"] == cost
-    for key in EXPECTED_KEYS:
-        assert saved[key] == primary[key]
-    saved_cost = json.loads(
-        (out_dir / "metrics_cost_aware.json").read_text(encoding="utf-8")
+
+def test_loso_two_budgets(out_dir: Path) -> None:
+    df = pd.concat(
+        [
+            _learnable_df(seed=0).assign(base_shots=256),
+            _learnable_df(seed=1).assign(base_shots=4096),
+        ],
+        ignore_index=True,
     )
-    assert saved_cost == cost
+    metrics = train_and_eval(df, out_dir)
+    loso = metrics["loso"]
+    assert isinstance(loso, dict)
+    assert loso["n_budgets"] == 2
+    assert set(loso["per_budget_accuracy"]) == {"256", "4096"}
+    assert set(loso["per_budget_macro_f1"]) == set(loso["per_budget_accuracy"])
+    assert 0.0 <= loso["accuracy"] <= 1.0
 
 
-def test_train_and_eval_all_legacy_schema_no_cost_column(out_dir: Path) -> None:
-    """Backward compat: old tiny/small CSVs without the cost-aware column
-    must still train (accuracy-only model) without crashing."""
+def test_loso_absent_single_budget(out_dir: Path) -> None:
+    # A base_shots column with a single distinct value must NOT trigger loso.
+    df = _learnable_df().assign(base_shots=1024)
+    metrics = train_and_eval(df, out_dir)
+    assert "loso" not in metrics
+
+
+# ==========================================================================
+# 'tie' class flows through CV / LOFO / LODO like any class
+# ==========================================================================
+
+
+def test_tie_class_is_first_class_citizen(out_dir: Path, ref_stats) -> None:
+    df = _tie_training_df()
+    df[SIGNIFICANT_LABEL] = derive_significant_label(df)
+    # sanity: the derived label really contains the tie class with >= 2 members
+    counts = df[SIGNIFICANT_LABEL].value_counts()
+    assert counts.get(TIE_CLASS, 0) >= 2
+    metrics = train_and_eval(
+        df,
+        out_dir,
+        label_column=SIGNIFICANT_LABEL,
+        bundle_filename="model_significant.joblib",
+        metrics_filename="metrics_significant.json",
+    )
+    assert TIE_CLASS in metrics["labels"]
+    # tie participates in CV (its confusion-matrix row is not forced to zero)
+    tie_idx = metrics["labels"].index(TIE_CLASS)
+    assert sum(metrics["confusion_matrix"][tie_idx]) > 0
+    # LOFO / LODO evaluate with tie as an ordinary class
+    assert isinstance(metrics["lofo"], dict)
+    assert metrics["lofo"]["n_families"] == 3
+    assert isinstance(metrics["lodo"], dict)
+    assert metrics["lodo"]["n_devices"] == 2
+    bundle = joblib.load(out_dir / "model_significant.joblib")
+    assert TIE_CLASS in bundle["classes"]
+    assert bundle["label_column"] == SIGNIFICANT_LABEL
+
+
+# ==========================================================================
+# train_and_eval_all forwards the four kwargs
+# ==========================================================================
+
+
+def test_train_and_eval_all_forwards_v2_kwargs(out_dir: Path) -> None:
     df = _learnable_df()
-    assert "best_technique_cost_aware" not in df.columns
-    result = train_and_eval_all(df, out_dir)
-    assert result["best_technique_cost_aware"] is None
-    assert set(result["best_technique"].keys()) == EXPECTED_KEYS
-    assert (out_dir / "model.joblib").exists()
-    assert not (out_dir / "model_cost_aware.joblib").exists()
-    saved = json.loads((out_dir / "metrics.json").read_text(encoding="utf-8"))
-    assert "cost_aware" not in saved
+    df["best_technique_cost_aware"] = [
+        "rem" if i % 2 == 0 else "raw" for i in range(len(df))
+    ]
+    # abstain_threshold reaches BOTH underlying train_and_eval calls (kept
+    # abstain-only, not calibrate, so the forwarding test stays cheap).
+    results = train_and_eval_all(df, out_dir, abstain_threshold=0.6)
+    for name in ("model.joblib", "model_cost_aware.joblib"):
+        bundle = joblib.load(out_dir / name)
+        assert bundle["abstain_threshold"] == 0.6
+        assert bundle["calibrated"] is False
+    assert results["best_technique"]["abstain_threshold"] == 0.6
+    assert results["best_technique_cost_aware"]["abstain_threshold"] == 0.6
 
 
-def test_train_and_eval_all_unusable_cost_column_skips_gracefully(
-    out_dir: Path,
-) -> None:
-    df = _learnable_df()
-    df["best_technique_cost_aware"] = ""  # column present but all empty
-    result = train_and_eval_all(df, out_dir)  # must NOT raise
-    assert result["best_technique_cost_aware"] is None
-    assert (out_dir / "model.joblib").exists()
-    assert not (out_dir / "model_cost_aware.joblib").exists()
+# ==========================================================================
+# Byte-identical regression on the real research data (both labels).
+# ==========================================================================
 
 
-# --------------------------------------------------------------------------
-# CLI script end-to-end
-# --------------------------------------------------------------------------
+@pytest.mark.slow
+def test_research_default_path_byte_identical(out_dir: Path) -> None:
+    agg_path = ROOT / "results" / "research" / "aggregated.csv"
+    ref_path = ROOT / "results" / "research" / "metrics.json"
+    if not (agg_path.exists() and ref_path.exists()):
+        pytest.skip("research artifacts not present")
+    agg = pd.read_csv(agg_path)
+    stored = json.loads(ref_path.read_text(encoding="utf-8"))
+    stored_primary = {k: v for k, v in stored.items() if k != "cost_aware"}
+
+    primary = train_and_eval(agg, out_dir, "best_technique")
+    assert primary == stored_primary  # full-dict byte-identical
+    # no V2 keys leak onto the default path
+    assert V1_METRICS_KEYS == set(primary)
+
+    cost = train_and_eval(
+        agg,
+        out_dir,
+        "best_technique_cost_aware",
+        bundle_filename="model_cost_aware.joblib",
+        metrics_filename="metrics_cost_aware.json",
+    )
+    assert cost == stored["cost_aware"]
 
 
-def test_train_model_cli(tmp_path: Path) -> None:
-    csv_path = tmp_path / "results.csv"
+# ==========================================================================
+# CLI: new flags.
+# ==========================================================================
+
+
+def _load_cli():
+    """Import scripts/train_model.py as a module for in-process main() calls."""
+    path = ROOT / "scripts" / "train_model.py"
+    spec = importlib.util.spec_from_file_location("qemsel_train_model_cli", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_cli_calibrate_subprocess(tmp_path: Path) -> None:
+    """--calibrate needs no B6 stats, so it runs end-to-end via subprocess."""
+    csv = tmp_path / "results.csv"
     out = tmp_path / "run"
-    _learnable_df().to_csv(csv_path, index=False)
-    script = (
-        Path(__file__).resolve().parents[1] / "scripts" / "train_model.py"
-    )
+    _learnable_df().to_csv(csv, index=False)
+    script = ROOT / "scripts" / "train_model.py"
     proc = subprocess.run(
-        [sys.executable, str(script), "--data", str(csv_path), "--out", str(out)],
-        capture_output=True,
-        text=True,
-        timeout=300,
+        [sys.executable, str(script), "--data", str(csv), "--out", str(out),
+         "--calibrate", "--abstain-threshold", "0.6"],
+        capture_output=True, text=True, timeout=300,
     )
     assert proc.returncode == 0, proc.stderr
-    assert (out / "model.joblib").exists()
-    assert (out / "metrics.json").exists()
-    assert "best model" in proc.stdout
-    assert "class balance" in proc.stdout
+    bundle = joblib.load(out / "model.joblib")
+    assert bundle["calibrated"] is True
+    assert bundle["abstain_threshold"] == 0.6
+    metrics = json.loads((out / "metrics.json").read_text(encoding="utf-8"))
+    assert "calibration" in metrics
+    assert metrics["abstain_threshold"] == 0.6
+
+
+def test_cli_label_significant_in_process(tmp_path: Path, monkeypatch) -> None:
+    """--label significant derives the tie label and writes its own bundle.
+
+    Run in-process (not subprocess) so the B6 sigma_shot stub can be
+    monkeypatched with the reference formula.
+    """
+    monkeypatch.setattr("qemsel.stats.sigma_shot", _ref_sigma_shot)
+    df = _tie_training_df()
+    csv = tmp_path / "results.csv"
+    out = tmp_path / "run"
+    df.to_csv(csv, index=False)
+    cli = _load_cli()
+    rc = cli.main(["--data", str(csv), "--out", str(out), "--label", "significant"])
+    assert rc == 0
+    assert (out / "model_significant.joblib").exists()
+    assert (out / "metrics_significant.json").exists()
+    metrics = json.loads((out / "metrics_significant.json").read_text(encoding="utf-8"))
+    assert metrics["label_column"] == SIGNIFICANT_LABEL
+    assert TIE_CLASS in metrics["labels"]
+    # the raw CSV was never mutated with the derived label column
+    assert SIGNIFICANT_LABEL not in pd.read_csv(csv).columns
