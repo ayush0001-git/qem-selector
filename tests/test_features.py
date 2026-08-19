@@ -24,6 +24,7 @@ from qemsel.features import (
     FEATURE_NAMES_BY_VERSION,
     FEATURE_NAMES_V2,
     extract_features,
+    convert_circuit_to_graph,
 )
 
 _FAKE_INFO = {
@@ -421,3 +422,26 @@ class TestErrors:
             extract_features(
                 _known_circuit(), "NoSuchBackend", version=2, base_shots=None
             )
+
+
+class TestConvertCircuitToGraph:
+    def test_convert_simple_circuit(self) -> None:
+        qc = QuantumCircuit(2)
+        qc.h(0)
+        qc.cx(0, 1)
+
+        graph = convert_circuit_to_graph(qc)
+
+        assert "nodes" in graph
+        assert "edge_index" in graph
+
+        nodes = graph["nodes"]
+        edge_index = graph["edge_index"]
+
+        # There should be exactly two operation nodes (h and cx)
+        assert len(nodes) == 2
+        assert nodes[0]["op"] == "h"
+        assert nodes[1]["op"] == "cx"
+
+        # Edge index should represent the dependency flow from gate 0 to gate 1
+        assert len(edge_index) >= 1

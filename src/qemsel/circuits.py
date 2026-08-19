@@ -378,7 +378,8 @@ def _sample_above_threshold(
         RuntimeWarning,
         stacklevel=3,
     )
-    assert best_circuit is not None  # MAX_ATTEMPTS >= 1
+    if best_circuit is None:
+        raise RuntimeError("generate_suite: no valid circuit could be found.")
     return best_circuit, best_seed
 
 

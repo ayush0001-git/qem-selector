@@ -7,7 +7,9 @@ This script demonstrates two advanced production features:
 
 from qiskit import QuantumCircuit
 from qiskit_aer import AerSimulator
+
 from qemsel.features import convert_circuit_to_graph
+
 
 def main():
     print("--- Production Scale Up Blueprint ---")
@@ -16,20 +18,20 @@ def main():
     # 1. GRAPH NEURAL NETWORK (GNN) INPUT PREPARATION
     # =========================================================================
     print("\n[1] Preparing Quantum Circuit as a Graph for GNN...")
-    
+
     # Create a simple circuit
     qc = QuantumCircuit(3)
     qc.h(0)
     qc.cx(0, 1)
     qc.cx(1, 2)
-    
+
     # Convert to graph representation
     graph = convert_circuit_to_graph(qc)
-    
+
     print("\nExtracted Graph Nodes (Gates):")
     for node in graph["nodes"]:
         print(f"  Node ID {node['id']}: Gate '{node['op']}' acting on Qubits {node['qargs']}")
-        
+
     print("\nExtracted Graph Edges (Data Flow Adjacency):")
     for edge in graph["edge_index"]:
         print(f"  Edge: Gate {edge[0]} ---> Gate {edge[1]} (data flows from gate {edge[0]} to {edge[1]})")
@@ -56,13 +58,13 @@ def main():
     # 2. GPU ACCELERATION FOR 10,000+ SIMULATIONS
     # =========================================================================
     print("\n[2] Setting up GPU Simulator for Large Scale Runs (10,000+)...")
-    
+
     try:
         # Create an Aer simulator configured to run on NVIDIA GPUs
         sim_gpu = AerSimulator(method="statevector", device="GPU")
         print("  - AerSimulator successfully initialized with GPU device support!")
         print("  - Configuration: device='GPU', method='statevector'")
-    except Exception as e:
+    except Exception:
         print("  - Note: GPU simulator initialization skipped (No CUDA/NVIDIA GPU detected on this local machine).")
         print("  - To run 10,000+ configurations in production, deploy this code to a GPU-enabled cloud instance.")
 

@@ -81,12 +81,11 @@ import math
 from typing import Callable
 
 import numpy as np
-from qiskit import QuantumCircuit, transpile
-
 from mitiq import zne
 from mitiq.cdr import execute_with_cdr
 from mitiq.zne import RichardsonFactory
 from mitiq.zne.scaling import fold_gates_at_random
+from qiskit import QuantumCircuit, transpile
 
 # NOTE: backends does NOT import mitigation (hardware.py imports both, but
 # backends only imports hardware lazily inside functions), so this

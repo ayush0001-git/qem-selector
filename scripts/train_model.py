@@ -25,6 +25,10 @@ cost-aware metrics into ``metrics.json`` under the ``cost_aware`` key so
 
 from __future__ import annotations
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+
 import argparse
 import json
 from pathlib import Path

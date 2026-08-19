@@ -48,25 +48,39 @@ transfers to real hardware is an open question the roadmap below addresses.
 
 ## Install
 
-Prerequisites: Python 3.12+ on Windows (paths below are PowerShell; the
-project root path contains **double spaces**, so always quote it).
+Prerequisites: Python 3.12+ (supports Windows, macOS, and Linux).
 
+**Windows (PowerShell):**
 ```powershell
-cd "E:\quatum  computiiing\qem-selector"
-python -m venv .venv     # skip this line if .venv already exists
+cd qem-selector
+python -m venv .venv
 & ".\.venv\Scripts\python.exe" -m pip install -r requirements.txt
 & ".\.venv\Scripts\python.exe" -m pip install -e .
 ```
 
-Verify the environment (checks qiskit, mitiq, fake backends, the `ply`
-dependency mitiq needs for qiskit circuits, etc.):
+**macOS / Linux (Bash):**
+```bash
+cd qem-selector
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install -e .
+```
 
+Verify the environment (checks qiskit, mitiq, fake backends, etc.):
+
+**Windows:**
 ```powershell
 & ".\.venv\Scripts\python.exe" scripts\verify_env.py
+```
+**macOS / Linux:**
+```bash
+python scripts/verify_env.py
 ```
 
 Run the test suite:
 
+**Windows:**
 ```powershell
 & ".\.venv\Scripts\python.exe" -m pytest -q
 ```
@@ -93,14 +107,24 @@ See "The research run" below for what the research configs add.)
 Start with the shipped **tiny** config (also the default `--config` of
 `run_experiment.py`) and run the pipeline end to end:
 
+**Windows (PowerShell):**
 ```powershell
-cd "E:\quatum  computiiing\qem-selector"
-
+cd qem-selector
 # 1. Benchmark: run every (circuit, backend, technique) combo -> labeled CSV
 & ".\.venv\Scripts\python.exe" scripts\run_experiment.py --config configs\tiny.yaml --out results\tiny
 
 # 2. Train: fit RandomForest + GradientBoosting on the labels, keep the best
 & ".\.venv\Scripts\python.exe" scripts\train_model.py --results results\tiny\results.csv --out results\tiny
+```
+
+**macOS / Linux (Bash):**
+```bash
+cd qem-selector
+# 1. Benchmark
+python scripts/run_experiment.py --config configs/tiny.yaml --out results/tiny
+
+# 2. Train
+python scripts/train_model.py --results results/tiny/results.csv --out results/tiny
 ```
 
 Outputs land in `results\tiny\`: `results.csv` (one row per circuit-backend
@@ -137,29 +161,38 @@ min_abs_ideal: 0.25  # optional: skip circuits with |ideal| below this
 
 ## Full workflow
 
+**Windows (PowerShell):**
 ```powershell
-cd "E:\quatum  computiiing\qem-selector"
+cd qem-selector
 
 # 1. Benchmark sweep (edit configs\experiment.yaml to scale up)
 & ".\.venv\Scripts\python.exe" scripts\run_experiment.py --config configs\experiment.yaml --out results\run1
 
-# 2. Train + evaluate the selector model (--label both additionally trains
-#    the equal-shot-budget model -> model_cost_aware.joblib and embeds its
-#    metrics so the report renders both label variants side by side).
-#    RECOMMENDED data file: aggregated.csv (seed-AVERAGED labels + seed-mean
-#    features, written next to results.csv) — per-seed winner labels are
-#    noisier (they disagree with the seed-averaged winner on a meaningful
-#    fraction of rows). Pass results.csv only for per-seed ablations.
+# 2. Train + evaluate the selector model (--label both trains both base and cost-aware)
 & ".\.venv\Scripts\python.exe" scripts\train_model.py --results results\run1\aggregated.csv --out results\run1 --label both
 
-# 3. Generate the report (report.md + plots: error by technique, win rates,
-#    confusion matrix, feature importances, and — when the data has noise-
-#    scaled '<Backend>@x<scale>' rows — the winner-vs-noise-scale sweep)
+# 3. Generate the report (report.md + plots)
 & ".\.venv\Scripts\python.exe" scripts\make_report.py --data results\run1\results.csv --metrics results\run1\metrics.json --out results\run1
 
-# 4. Ask for a recommendation for a new circuit (give one of --demo <family>
-#    or --qasm <file>; --demo also takes --qubits --depth --seed)
+# 4. Ask for a recommendation for a new circuit
 & ".\.venv\Scripts\python.exe" scripts\recommend.py --model results\run1\model.joblib --backend FakeManilaV2 --demo ghz_plus
+```
+
+**macOS / Linux (Bash):**
+```bash
+cd qem-selector
+
+# 1. Benchmark sweep
+python scripts/run_experiment.py --config configs/experiment.yaml --out results/run1
+
+# 2. Train + evaluate
+python scripts/train_model.py --results results/run1/aggregated.csv --out results/run1 --label both
+
+# 3. Generate the report
+python scripts/make_report.py --data results/run1/results.csv --metrics results/run1/metrics.json --out results/run1
+
+# 4. Ask for a recommendation
+python scripts/recommend.py --model results/run1/model.joblib --backend FakeManilaV2 --demo ghz_plus
 ```
 
 (Run any script with `--help` for the full flag list.)

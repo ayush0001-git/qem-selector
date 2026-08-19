@@ -32,6 +32,7 @@ so tests can monkeypatch them.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import sys
 import time
@@ -48,6 +49,15 @@ from qemsel import features as _features
 from qemsel import hardware as _hardware
 from qemsel import ideal as _ideal
 from qemsel import mitigation as _mitigation
+
+_log = logging.getLogger(__name__)
+
+def print(*args, sep=" ", end="\n", file=None, flush=False):
+    msg = sep.join(str(arg) for arg in args)
+    if "warning" in msg.lower() or "error" in msg.lower() or "abort" in msg.lower():
+        _log.warning(msg)
+    else:
+        _log.info(msg)
 
 _NAN: float = float("nan")
 
@@ -1059,7 +1069,7 @@ def run_experiment(config: dict, out_dir: Path, num_workers: int = 1) -> pd.Data
         for backend_name in backend_names:
             pauli = _resolve_pauli(pauli_cfg, spec.family, circuit.num_qubits)
             ideal_value = float(_ideal.ideal_expectation(circuit, pauli))
-            
+
             if min_abs_ideal > 0.0 and abs(ideal_value) < min_abs_ideal:
                 with skipped_path.open("a", encoding="utf-8") as fh:
                     fh.write(
@@ -1107,7 +1117,7 @@ def run_experiment(config: dict, out_dir: Path, num_workers: int = 1) -> pd.Data
                     ): (key, time.monotonic())
                     for spec, circuit, backend_name, pauli, base_shots, ideal_value, key in tasks
                 }
-                
+
                 completed_count = 0
                 for future in concurrent.futures.as_completed(futures_map):
                     completed_count += 1
@@ -1118,7 +1128,7 @@ def run_experiment(config: dict, out_dir: Path, num_workers: int = 1) -> pd.Data
                         _append_row(csv_path, row, columns)
                         new_rows.append(row)
                         done_pairs.add(key)
-                        
+
                         elapsed = time.monotonic() - t_start
                         print(
                             f"[{completed_count}/{n_pending}] {unit_label}: "
@@ -1159,7 +1169,7 @@ def run_experiment(config: dict, out_dir: Path, num_workers: int = 1) -> pd.Data
                     _append_row(csv_path, row, columns)
                     new_rows.append(row)
                     done_pairs.add(key)
-                    
+
                     elapsed = time.monotonic() - t_start
                     print(
                         f"[{completed_count}/{n_pending}] {unit_label}: "

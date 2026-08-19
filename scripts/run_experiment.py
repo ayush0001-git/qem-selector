@@ -10,6 +10,10 @@ Re-running the same command RESUMES a crashed/interrupted run: completed
 
 from __future__ import annotations
 
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+
 import argparse
 import sys
 from pathlib import Path
@@ -72,10 +76,8 @@ def main(argv: list[str] | None = None) -> int:
         b for b in (config.get("backends") or []) if str(b).startswith("ibm_")
     ]
     if ibm_backends:
-        from qemsel import hardware
+        from qemsel import hardware, mitigation
 
-        from qemsel import mitigation
-        
         if args.force_hardware:
             print("real hardware requested: bypassing free-plan cost estimation (--force-hardware).")
         else:

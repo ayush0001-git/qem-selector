@@ -22,8 +22,6 @@ from pathlib import Path
 
 import yaml
 
-from qemsel import hardware
-
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments."""
@@ -50,8 +48,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         config = yaml.safe_load(args.config.read_text(encoding="utf-8"))
-        from qemsel import hardware
-        from qemsel import mitigation
+        from qemsel import hardware, mitigation
 
         original_mult = mitigation.SHOT_MULTIPLIER
         mitigation.SHOT_MULTIPLIER = mitigation.SHOT_MULTIPLIER_V2

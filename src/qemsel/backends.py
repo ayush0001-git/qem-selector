@@ -68,6 +68,7 @@ names accept NO suffix — noise scaling is simulation-only).
 from __future__ import annotations
 
 import math
+import threading
 from typing import Callable
 
 from qiskit import QuantumCircuit, transpile
@@ -115,6 +116,7 @@ _SCALED_READOUT_ERROR_CAP: float = 0.45
 #: Cache for get_backend_info results, keyed by backend name. Populated
 #: lazily; get_backend_info returns a fresh copy so callers cannot corrupt it.
 _INFO_CACHE: dict[str, dict] = {}
+_INFO_CACHE_LOCK = threading.Lock()
 
 
 def _validate_pauli(pauli: str, n_qubits: int) -> None:
@@ -380,8 +382,9 @@ def get_backend_info(name: str) -> dict:
         info["name"] = name
         return info
 
-    if name in _INFO_CACHE:
-        return dict(_INFO_CACHE[name])
+    with _INFO_CACHE_LOCK:
+        if name in _INFO_CACHE:
+            return dict(_INFO_CACHE[name])
 
     backend = _make_fake_backend(base_name)
     target = backend.target
@@ -418,7 +421,8 @@ def get_backend_info(name: str) -> dict:
         "avg_readout_error": _mean(readout_errors),
         "max_readout_error": max(readout_errors) if readout_errors else float("nan"),
     }
-    _INFO_CACHE[name] = info
+    with _INFO_CACHE_LOCK:
+        _INFO_CACHE[name] = info
     return dict(info)
 
 

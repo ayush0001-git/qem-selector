@@ -18,14 +18,14 @@ def section(name):
 
 # ---------------------------------------------------------------- versions
 section("VERSIONS")
+import matplotlib
+import mitiq
+import pandas
 import qiskit
 import qiskit_aer
-import mitiq
-import sklearn
-import pandas
-import matplotlib
-import yaml
 import qiskit_ibm_runtime
+import sklearn
+import yaml
 
 print(f"python            : {sys.version.split()[0]}")
 print(f"qiskit            : {qiskit.__version__}")

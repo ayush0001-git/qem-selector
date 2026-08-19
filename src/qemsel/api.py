@@ -7,14 +7,18 @@ under the planned shot budget.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
-from typing import Any, Callable
-import pandas as pd
+from typing import Any
+
 from qiskit import QuantumCircuit
+
+_log = logging.getLogger(__name__)
 
 from qemsel.backends import make_executor
 from qemsel.mitigation import apply_technique
 from qemsel.recommend import recommend
+
 
 class MitigatedExecutor:
     """Production-ready QEM Selector runner.
@@ -116,8 +120,10 @@ class MitigatedExecutor:
             )
         except Exception as e:
             # Safe production fallback
-            print(f"Warning: Mitigation technique '{tech}' failed with: {e!r}. "
-                  f"Falling back to '{fallback_technique}'.")
+            _log.warning(
+                f"Mitigation technique '{tech}' failed with: {e!r}. "
+                f"Falling back to '{fallback_technique}'."
+            )
             tech = fallback_technique
             mitigated_value = apply_technique(
                 name=tech,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TypedDict
 
 import joblib
 import numpy as np
@@ -10,6 +11,15 @@ import pandas as pd
 from qiskit import QuantumCircuit
 
 from qemsel.features import extract_features
+
+
+class RecommendationResult(TypedDict, total=False):
+    technique: str
+    probabilities: dict[str, float]
+    features: dict[str, float]
+    abstained: bool
+    abstain_threshold: float | None
+    feature_version: int
 
 #: Keys the joblib bundle written by ``qemsel.model.train_and_eval`` must have
 #: for a recommendation to be possible ('model_name'/'qemsel_version' are
@@ -62,7 +72,7 @@ def recommend(
     backend_name: str,
     *,
     base_shots: int | None = None,
-) -> dict:
+) -> RecommendationResult:
     """Predict the best QEM technique for one circuit on one backend.
 
     Args:

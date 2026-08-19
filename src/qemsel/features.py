@@ -297,7 +297,10 @@ def extract_features(
         "backend_avg_readout_error": float(info["avg_readout_error"]),
     }
     if version == 1:
-        assert list(features) == FEATURE_NAMES  # stable-order invariant
+        if list(features) != FEATURE_NAMES:
+            raise RuntimeError(
+                f"Feature order broken: expected {FEATURE_NAMES}, got {list(features)}"
+            )
         return features
 
     # ---- version 2: append five additive features (order = FEATURE_NAMES_V2)
@@ -321,7 +324,10 @@ def extract_features(
             "backend_avg_1q_error": float(info["avg_1q_error"]),
         }
     )
-    assert list(features) == FEATURE_NAMES_V2  # stable-order invariant
+    if list(features) != FEATURE_NAMES_V2:
+        raise RuntimeError(
+            f"Feature V2 order broken: expected {FEATURE_NAMES_V2}, got {list(features)}"
+        )
     return features
 
 

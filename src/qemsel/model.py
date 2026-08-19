@@ -72,6 +72,7 @@ All randomness is seeded (``random_state=0`` everywhere); no global state.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 from pathlib import Path
@@ -90,7 +91,16 @@ from sklearn.model_selection import GroupKFold, StratifiedGroupKFold
 
 import qemsel
 from qemsel import stats
-from qemsel.features import FEATURE_NAMES, FEATURE_NAMES_BY_VERSION
+from qemsel.features import FEATURE_NAMES_BY_VERSION
+
+_log = logging.getLogger(__name__)
+
+def print(*args, sep=" ", end="\n", file=None, flush=False):
+    msg = sep.join(str(arg) for arg in args)
+    if "warning" in msg.lower() or "error" in msg.lower():
+        _log.warning(msg)
+    else:
+        _log.info(msg)
 
 try:  # sklearn >= 1.6: cv='prefit' was removed in favour of FrozenEstimator
     from sklearn.frozen import FrozenEstimator
@@ -916,7 +926,7 @@ def train_and_eval(
             }
             oof_predictions[name] = oof
             fold_accs_by_model[name] = fold_accs
-        eval_X, eval_y = X_cv, y_cv
+        eval_y = y_cv
     else:
         cv_folds = 0
         cv_grouping = "none (degenerate)"
@@ -940,7 +950,7 @@ def train_and_eval(
             }
             oof_predictions[name] = pred
             fold_accs_by_model[name] = [acc]
-        eval_X, eval_y = X, y
+        eval_y = y
 
     # ---- pick best NON-dummy model by macro-F1 (ties -> first in order) --
     best_model_name = max(

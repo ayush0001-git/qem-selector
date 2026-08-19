@@ -1,8 +1,18 @@
 """qemsel — benchmark quantum error mitigation techniques and recommend the best one per circuit.
 
-IMPORTANT: keep this file version-string-only. Do NOT add submodule imports here —
-builders work on modules in parallel and eager imports would make `import qemsel`
-fail while any one module is incomplete.
+Public API exports.
 """
 
+from __future__ import annotations
+
+from qemsel.api import MitigatedExecutor, run
+from qemsel.features import convert_circuit_to_graph, extract_features
+
 __version__ = "0.1.0"
+
+__all__ = [
+    "MitigatedExecutor",
+    "run",
+    "extract_features",
+    "convert_circuit_to_graph",
+]
