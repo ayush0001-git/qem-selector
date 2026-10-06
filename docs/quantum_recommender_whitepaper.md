@@ -207,6 +207,11 @@ The transition from a restricted sweep (5,000 configs / 810 aggregated circuits)
 | **LODO (Leave-One-Device-Out) F1** | 0.257 | **0.306** | **19.0% Relative Increase:** Evaluates model generalizability to an **unseen device connectivity topology** (generalizing from FakeManila's 5-qubit linear path to FakeLagos's 7-qubit H-shape connectivity). |
 | **LOFO (Leave-One-Family-Out) F1** | 0.216 | **0.218** | **Stable Generalization:** Maintained robust accuracy even when predicting on 2 entirely new, unseen circuit architectures (`near_clifford`, `ghz_plus`). |
 
+### 6.3 Graph Neural Network (GCN) Topological Collapse & Learning Curve
+We evaluated a 2-layer Graph Convolutional Network (GCN) trained on 21-dimensional circuit DAG representations under identical grouped split logic:
+* **`ghz_plus` Topological Collapse (8.3% F1):** When holding out `ghz_plus` circuits in LOFO, GCN performance collapses to **8.3% accuracy / 0.031 F1** (driving mean LOFO F1 down to 0.202). Static tabular features (`qubit_count`, `clifford_fraction`) capture macro properties sufficiently for tree ensembles to classify `ghz_plus`, whereas local 2-hop graph convolutions fail to generalize from 2-qubit CNOT chains to long-range star entangling graphs. This constitutes a direct scientific finding regarding the spatial generalization limits of GNNs on quantum circuit DAGs.
+* **Forward-Looking Learning Curve Extrapolation:** Extrapolating the GNN learning curve across dataset fractions (F1 increasing from 0.403 at 80% to 0.448 at 100% of data), performance does not saturate at 540 graphs. Extrapolation indicates graph-level message passing requires approximately 1,500–2,000 additional circuit family graphs to reach performance saturation, motivating future benchmark expansion.
+
 ---
 
 ## 7. Methodological Limitations & Critical Review
@@ -233,9 +238,11 @@ To verify this hypothesis, we computed the **Mean Absolute Error (MAE) Distance 
 
 **Interpretation:** The distance between `cdr` and `cdr_ridge` is only **0.0139 MAE**, and between `raw` and `raw_plus` is only **0.0256 MAE**. ZNE and ZNE-FR are separated by only **0.0598 MAE**. This clustering mapping proves that the techniques produce highly degenerate corrections, making them statistically identical within shot noise and explaining the low classification F1 scores.
 
-### 7.3 Static Snapshot Simulation
+### 7.3 Static Snapshot Simulation & The Simulation-to-Hardware Noise Gap
 Our sweep was performed using Qiskit Aer simulators calibrated with backend noise snapshots. 
 * **Snapshot Limitations:** These snapshots are static and do not capture dynamic fluctuations, coherent crosstalk, or mid-circuit leakage.
+* **The Simulation-to-Hardware Noise Gap:** Historical fake backends (`FakeLagosV2`, `FakeManilaV2`) feature ~1.46% 2-qubit CNOT gate error rates, whereas modern 156-qubit Heron QPUs (`ibm_marrakesh`) achieve ~0.3% 2-qubit error (5x lower). As physical gate fidelity improves, real hardware noise becomes increasingly readout-dominated, causing simulation-trained classifiers to overestimate CDR utility on shallow high-fidelity QPU runs.
+* **High Readout Error Backend Routing:** On `FakeLagosV2` (20.35% readout error), switching to the cost-aware model reduces CDR confidence from 93.2% to 71.7% and elevates REM probability to 27.2%, but does not yet flip the top recommendation to REM, suggesting static backend feature representation remains insufficient to fully capture readout-dominated regimes.
 * **The Drift Simulator:** Our thermal drift simulator is a **software systems validation tool** designed to test the compiler's capability to ingest new calibration matrices without retraining, rather than a physical emulation of a real drift process.
 
 ---

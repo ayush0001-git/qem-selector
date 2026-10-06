@@ -227,13 +227,48 @@ def ghz_plus(n_qubits: int, depth: int, seed: int) -> QuantumCircuit:
     qc.h(0)
     for q in range(n_qubits - 1):
         qc.cx(q, q + 1)
-    padders: list[Callable[[QuantumCircuit, np.random.Generator], None]] = [
+    qubit_depths = [1] * n_qubits
+    if n_qubits >= 2:
+        for q in range(n_qubits - 1):
+            d = max(qubit_depths[q], qubit_depths[q + 1]) + 1
+            qubit_depths[q] = d
+            qubit_depths[q + 1] = d
+
+    padders = [
         _pad_rz_pair,
         _pad_x_pair,
         _pad_h_pair,
     ]
     if n_qubits >= 2:
         padders.append(_pad_cx_pair)
+
+    while max(qubit_depths) < depth:
+        padder_idx = int(rng.integers(0, len(padders)))
+        padder = padders[padder_idx]
+        if padder is _pad_cx_pair:
+            q = int(rng.integers(0, qc.num_qubits - 1))
+            qc.cx(q, q + 1)
+            qc.cx(q, q + 1)
+            d = max(qubit_depths[q], qubit_depths[q + 1]) + 2
+            qubit_depths[q] = d
+            qubit_depths[q + 1] = d
+        elif padder is _pad_rz_pair:
+            q = int(rng.integers(0, qc.num_qubits))
+            angle = _random_angle(rng)
+            qc.rz(angle, q)
+            qc.rz(-angle, q)
+            qubit_depths[q] += 2
+        elif padder is _pad_x_pair:
+            q = int(rng.integers(0, qc.num_qubits))
+            qc.x(q)
+            qc.x(q)
+            qubit_depths[q] += 2
+        elif padder is _pad_h_pair:
+            q = int(rng.integers(0, qc.num_qubits))
+            qc.h(q)
+            qc.h(q)
+            qubit_depths[q] += 2
+
     while qc.depth() < depth:
         padders[int(rng.integers(0, len(padders)))](qc, rng)
     return qc

@@ -87,7 +87,7 @@ from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.inspection import permutation_importance
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score
-from sklearn.model_selection import GroupKFold, StratifiedGroupKFold
+from sklearn.model_selection import GridSearchCV, GroupKFold, StratifiedGroupKFold
 
 import qemsel
 from qemsel import stats
@@ -629,6 +629,7 @@ def train_and_eval(
     calibrate: bool = False,
     abstain_threshold: float | None = None,
     extended_stats: bool = False,
+    tune_hyperparameters: bool = False,
 ) -> dict:
     """Train classifiers predicting the winner label from circuit features.
 
@@ -898,7 +899,6 @@ def train_and_eval(
     oof_predictions: dict[str, np.ndarray] = {}
     fold_accs_by_model: dict[str, list[float]] = {}
     splits: list[tuple[np.ndarray, np.ndarray]] = []
-
     if n_splits >= 2:
         cv_folds = n_splits
         if dropped_classes:
@@ -916,6 +916,35 @@ def train_and_eval(
                 f"{n_groups} feature groups -> {n_splits}-fold grouped CV"
             )
         splits, cv_grouping = _grouped_splits(X_cv, y_cv, groups_cv, n_splits)
+        tuned_params: dict[str, dict] = {}
+        if tune_hyperparameters:
+            print("[qemsel.model] Running GridSearchCV hyperparameter tuning...")
+            param_grids = {
+                "random_forest": {
+                    "n_estimators": [100, 300],
+                    "max_depth": [None, 5, 10],
+                    "min_samples_leaf": [1, 3],
+                },
+                "gradient_boosting": {
+                    "n_estimators": [50, 100],
+                    "learning_rate": [0.05, 0.1],
+                    "max_depth": [3, 5],
+                },
+            }
+            for name in ("random_forest", "gradient_boosting"):
+                if name in candidates:
+                    grid = GridSearchCV(
+                        estimator=candidates[name],
+                        param_grid=param_grids[name],
+                        cv=splits,
+                        scoring="f1_macro",
+                        n_jobs=-1,
+                    )
+                    grid.fit(X_cv, y_cv)
+                    best_est = grid.best_estimator_
+                    candidates[name] = best_est
+                    tuned_params[name] = grid.best_params_
+                    print(f"[qemsel.model] {name} best params: {grid.best_params_}")
         for name, estimator in candidates.items():
             oof, fold_accs = _oof_from_splits(estimator, X_cv, y_cv, splits)
             acc, f1 = _score(y_cv, oof)
@@ -1209,6 +1238,7 @@ def train_and_eval_all(
     calibrate: bool = False,
     abstain_threshold: float | None = None,
     extended_stats: bool = False,
+    tune_hyperparameters: bool = False,
 ) -> dict:
     """Train BOTH winner-label models when the data supports them.
 
@@ -1247,6 +1277,7 @@ def train_and_eval_all(
         calibrate=calibrate,
         abstain_threshold=abstain_threshold,
         extended_stats=extended_stats,
+        tune_hyperparameters=tune_hyperparameters,
     )
     primary = train_and_eval(df, out_dir, "best_technique", **v2_kwargs)
 

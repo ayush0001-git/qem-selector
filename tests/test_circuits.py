@@ -487,6 +487,7 @@ def test_min_abs_ideal_real_statevector_guarantees_threshold():
         "depths": [4],
         "seeds": [0, 1, 2],
         "min_abs_ideal": 0.25,
+
     }
     with _warnings.catch_warnings(record=True) as caught:
         _warnings.simplefilter("always")

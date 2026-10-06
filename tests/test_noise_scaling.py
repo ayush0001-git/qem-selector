@@ -5,15 +5,13 @@ Covers both upward (scale >= 1.0) and downward/sub-unity (0 < scale < 1.0) noise
 
 from __future__ import annotations
 
-import math
 import pytest
 from qiskit import QuantumCircuit
 
 from qemsel.backends import (
+    _SCALED_READOUT_ERROR_CAP,
     BACKENDS,
     LOW_NOISE_SCALES,
-    _SCALED_GATE_ERROR_CAP,
-    _SCALED_READOUT_ERROR_CAP,
     get_backend_info,
     make_executor,
     parse_backend_name,

@@ -23,8 +23,8 @@ from qemsel.features import (
     FEATURE_NAMES,
     FEATURE_NAMES_BY_VERSION,
     FEATURE_NAMES_V2,
-    extract_features,
     convert_circuit_to_graph,
+    extract_features,
 )
 
 _FAKE_INFO = {

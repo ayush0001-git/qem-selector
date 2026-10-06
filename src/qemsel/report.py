@@ -58,6 +58,8 @@ _PNG_WIN = "win_rate.png"
 _PNG_CONFUSION = "confusion_matrix.png"
 _PNG_IMPORTANCES = "feature_importances.png"
 _PNG_NOISE = "winner_vs_noise.png"
+_PNG_LOFO = "lofo_breakdown.png"
+_PNG_LODO = "lodo_breakdown.png"
 
 #: V2 (builder-recommend / B8): the boundary-overlay figure is PRODUCED by
 #: qemsel.boundary.overlay_selector_vs_theory (constant OVERLAY_PNG there);
@@ -93,7 +95,6 @@ def _fmt(x: object) -> str:
     if val == int(val) and abs(val) < 1e6:
         return str(int(val))
     return f"{val:.3g}"
-
 
 def _fmt_pm(value: object, std: object) -> str:
     """Format 'value ± std' when a finite std is available, else just value."""
@@ -148,6 +149,7 @@ def _parse_backend(backend: str) -> tuple[str, float]:
     if m:
         return m.group("base"), float(m.group("scale"))
     return str(backend), 1.0
+
 
 
 def _noise_scales(df: pd.DataFrame) -> pd.Series:
@@ -350,6 +352,75 @@ def _save_feature_importances(model_metrics: dict, path: Path) -> None:
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
+
+
+def _save_lofo_breakdown(model_metrics: dict, path: Path) -> bool:
+    """Bar chart: Leave-One-Family-Out (LOFO) F1 score per held-out family."""
+    lofo = model_metrics.get("lofo")
+    if not isinstance(lofo, dict):
+        return False
+    per_f1 = lofo.get("per_family_macro_f1") or lofo.get("per_family_accuracy")
+    if not isinstance(per_f1, dict) or not per_f1:
+        return False
+    fig, ax = plt.subplots(figsize=(7.0, 4.5))
+    families = list(per_f1.keys())
+    scores = [float(per_f1[f]) for f in families]
+    bars = ax.bar(families, scores, color="#348ABD", width=0.5)
+    ax.set_ylim(0.0, 1.05)
+    ax.set_ylabel("Macro F1 / Accuracy")
+    ax.set_xlabel("Held-Out Circuit Family")
+    ax.set_title("Leave-One-Family-Out (LOFO) Generalization Breakdown")
+    ax.grid(axis="y", alpha=0.3)
+    for bar in bars:
+        height = bar.get_height()
+        ax.annotate(
+            f"{height:.2f}",
+            xy=(bar.get_x() + bar.get_width() / 2, height),
+            xytext=(0, 3),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return True
+
+
+def _save_lodo_breakdown(model_metrics: dict, path: Path) -> bool:
+    """Bar chart: Leave-One-Device-Out (LODO) F1 score per held-out device."""
+    lodo = model_metrics.get("lodo")
+    if not isinstance(lodo, dict):
+        return False
+    per_f1 = lodo.get("per_device_macro_f1") or lodo.get("per_device_accuracy")
+    if not isinstance(per_f1, dict) or not per_f1:
+        return False
+    fig, ax = plt.subplots(figsize=(7.0, 4.5))
+    devices = list(per_f1.keys())
+    scores = [float(per_f1[d]) for d in devices]
+    bars = ax.bar(devices, scores, color="#E24A33", width=0.5)
+    ax.set_ylim(0.0, 1.05)
+    ax.set_ylabel("Macro F1 / Accuracy")
+    ax.set_xlabel("Held-Out Device / Noise Profile")
+    ax.set_title("Leave-One-Device-Out (LODO) Generalization Breakdown")
+    ax.grid(axis="y", alpha=0.3)
+    for bar in bars:
+        height = bar.get_height()
+        ax.annotate(
+            f"{height:.2f}",
+            xy=(bar.get_x() + bar.get_width() / 2, height),
+            xytext=(0, 3),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return True
+
 
 
 # ---------------------------------------------------------------------------
@@ -1610,6 +1681,8 @@ def generate_report(
     noise_png_written = _save_winner_vs_noise(df, techniques, out_dir / _PNG_NOISE)
     _save_confusion_matrix(model_metrics, out_dir / _PNG_CONFUSION)
     _save_feature_importances(model_metrics, out_dir / _PNG_IMPORTANCES)
+    _save_lofo_breakdown(model_metrics, out_dir / _PNG_LOFO)
+    _save_lodo_breakdown(model_metrics, out_dir / _PNG_LODO)
 
     sections = [
         "# QEM-Selector — benchmark and recommender report",

@@ -14,8 +14,6 @@ identical values and these tests keep passing.
 
 from __future__ import annotations
 
-import math
-
 import numpy as np
 import pytest
 
@@ -23,7 +21,6 @@ from qemsel import boundary as B
 from qemsel import mitigation as _mit
 from qemsel.boundary import BoundaryParams
 from qemsel.features import FEATURE_NAMES
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers / fixtures

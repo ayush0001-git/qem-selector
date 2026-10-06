@@ -167,6 +167,11 @@ def main(argv: list[str] | None = None) -> int:
         help="V2: emit extended fold statistics (per-fold accuracies + "
         "fold_summary) into the metrics JSON",
     )
+    parser.add_argument(
+        "--tune",
+        action="store_true",
+        help="Run GridSearchCV hyperparameter tuning on RF/GBM candidate models",
+    )
     args = parser.parse_args(argv)
 
     v2_kwargs = dict(
@@ -174,6 +179,7 @@ def main(argv: list[str] | None = None) -> int:
         calibrate=args.calibrate,
         abstain_threshold=args.abstain_threshold,
         extended_stats=args.stats,
+        tune_hyperparameters=args.tune,
     )
 
     data_path = Path(args.data)

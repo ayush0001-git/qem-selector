@@ -117,6 +117,19 @@ _SCALED_READOUT_ERROR_CAP: float = 0.45
 #: lazily; get_backend_info returns a fresh copy so callers cannot corrupt it.
 _INFO_CACHE: dict[str, dict] = {}
 _INFO_CACHE_LOCK = threading.Lock()
+_HAS_GPU: bool | None = None
+
+
+def _is_gpu_available() -> bool:
+    global _HAS_GPU
+    if _HAS_GPU is None:
+        try:
+            from qiskit_aer import AerSimulator
+
+            _HAS_GPU = "GPU" in AerSimulator().available_devices()
+        except Exception:
+            _HAS_GPU = False
+    return _HAS_GPU
 
 
 def _validate_pauli(pauli: str, n_qubits: int) -> None:
@@ -514,11 +527,8 @@ def make_executor(
     simulator = AerSimulator.from_backend(backend)
 
     # Enable GPU acceleration if available on the host machine
-    try:
-        if "GPU" in AerSimulator().available_devices():
-            simulator.set_options(device="GPU")
-    except Exception:
-        pass
+    if _is_gpu_available():
+        simulator.set_options(device="GPU")
 
     if scale != 1.0:
         # Same simulator (so transpilation is identical across scales);

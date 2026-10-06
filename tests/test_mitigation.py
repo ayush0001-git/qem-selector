@@ -24,11 +24,11 @@ from qiskit.quantum_info import Pauli, Statevector
 import qemsel.ideal
 from qemsel import backends, mitigation
 from qemsel.mitigation import (
-    MitigationError,
     SHOT_MULTIPLIER,
     SHOT_MULTIPLIER_V2,
     TECHNIQUES,
     TECHNIQUES_V2,
+    MitigationError,
     apply_technique,
     richardson_coefficients,
     shots_consumed,

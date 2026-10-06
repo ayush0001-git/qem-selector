@@ -13,11 +13,11 @@ from typing import Any
 
 from qiskit import QuantumCircuit
 
-_log = logging.getLogger(__name__)
-
 from qemsel.backends import make_executor
 from qemsel.mitigation import apply_technique
 from qemsel.recommend import recommend
+
+_log = logging.getLogger(__name__)
 
 
 class MitigatedExecutor:

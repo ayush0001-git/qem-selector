@@ -86,10 +86,11 @@ def main():
     im = plt.imshow(results_grid, origin="lower", cmap="RdBu", aspect="auto", vmin=-vmax, vmax=vmax)
     plt.colorbar(im, label="Error Difference (Linear - Nonlinear)")
 
-    plt.xticks(range(len(n_values)), n_values)
+    x_labels = [f"N={n}\n({n*4}k/circ)\n({(n*4096*180)/1e6:.1f}M total)" for n in n_values]
+    plt.xticks(range(len(n_values)), x_labels)
     plt.yticks(range(len(f_values)), f_values)
-    plt.xlabel("CDR Training Set Size (N)")
-    plt.ylabel("Non-Clifford Fraction")
+    plt.xlabel("CDR Calibration Size N (Per-Circuit & 180-Circuit Total Shot Budget)")
+    plt.ylabel("Non-Clifford Fraction (f)")
     plt.title("CDR Crossover: Linear (Ridge) vs Nonlinear (RF) Regressor\n(Red/Positive = RF wins; Blue/Negative = Ridge wins)")
 
     # Annotate winners
